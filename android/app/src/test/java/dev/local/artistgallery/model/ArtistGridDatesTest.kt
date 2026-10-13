@@ -56,6 +56,17 @@ class ArtistGridDatesTest {
         }
     }
 
+    @Test fun artistDefaultDisplaysNewestDateFirstAndPreservesSortedImageOrder() {
+        val items = listOf(media("old"), media("new-b", nextDay), media("new-a", nextDay))
+        val sorted = sortArtistImages(items, MediaSort.Default)
+        listOf(3, 5).forEach { columns ->
+            val result = rows(sorted, MediaSort.Default, columns)
+            assertEquals(listOf("new-a", "new-b", "old"), ids(result))
+            assertEquals(listOf("2026年10月13日", "2026年10月12日"), result.mapNotNull { it.dateTitle })
+            assertTrue(result.flatMap { it.tiles }.all { it.addedDateText == null })
+        }
+    }
+
     @Test fun aRepeatedNonMonotonicDateCreatesANewRunWithoutRegrouping() {
         val items = listOf(media("old"), media("new", nextDay), media("old-again"))
         timeSorts.forEach { sort ->

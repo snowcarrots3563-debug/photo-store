@@ -269,6 +269,7 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
     override suspend fun completeAssetDelete(assetId: String) = withContext(Dispatchers.IO) {
         database.withTransaction {
             dao.clearArtistCover(assetId)
+            dao.deleteCollectionsEmptiedByAssets(listOf(assetId))
             dao.deleteAllReferences(assetId)
             dao.deleteAsset(assetId)
         }
@@ -287,6 +288,7 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
         if (deleted.isNotEmpty() || failed.isNotEmpty()) database.withTransaction {
             if (deleted.isNotEmpty()) {
                 dao.clearArtistCovers(deleted)
+                dao.deleteCollectionsEmptiedByAssets(deleted)
                 dao.deleteAllAssetReferences(deleted)
                 dao.deleteAssets(deleted)
             }
@@ -308,7 +310,7 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
     }
 
     private fun ArtistWithCollections.summary() = ArtistSummary(
-        artist.id, artist.name, collections.size, imageCount, coverStorageKey?.let(CoverRef::Asset) ?: CoverRef.None,
+        artist.id, artist.name, collections.size, imageCount, coverStorageKey?.let(CoverRef::Asset) ?: CoverRef.None, videoCount,
     )
 
     private fun CollectionWithMediaCounts.summary() = CollectionSummary(

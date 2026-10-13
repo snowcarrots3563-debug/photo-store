@@ -11,7 +11,7 @@ class AssetReader(
     private val context: Context,
     private val mediaFiles: MediaFileStore,
 ) {
-    fun contentUri(storageKey: String): Uri {
+    fun contentUri(storageKey: String, displayName: String? = null): Uri {
         val normalizedKey = try {
             UUID.fromString(storageKey).toString()
         } catch (_: IllegalArgumentException) {
@@ -19,6 +19,7 @@ class AssetReader(
         }
         val file = mediaFiles.originalFile(normalizedKey)
         if (!file.isFile) throw FileNotFoundException("图库原图不存在")
-        return FileProvider.getUriForFile(context, "${context.packageName}.assetfiles", file)
+        return if (displayName == null) FileProvider.getUriForFile(context, "${context.packageName}.assetfiles", file)
+        else FileProvider.getUriForFile(context, "${context.packageName}.assetfiles", file, displayName)
     }
 }

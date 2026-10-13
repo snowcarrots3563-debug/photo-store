@@ -187,12 +187,12 @@ class GalleryViewModelTest {
             .also { store.put("sortIndependent", it) }
         vm.onEvent(GalleryEvent.OpenArtist("a"))
         runCurrent()
-        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
+        assertEquals(listOf("ten", "two", "one"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.SetArtistImageSort(MediaSort.SizeAscending))
         assertEquals(listOf("two", "one", "ten"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.OpenArtist("b"))
         runCurrent()
-        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
+        assertEquals(listOf("ten", "two", "one"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.SetArtistImageSort(MediaSort.NameDescending))
         runCurrent()
         assertEquals(mapOf("a" to MediaSort.SizeAscending, "b" to MediaSort.NameDescending), preferences.options.value.artistImageSorts)
@@ -203,7 +203,7 @@ class GalleryViewModelTest {
         assertEquals(0, repository.writes)
     }
 
-    @Test fun mediaFlowChangesKeepSelectedSortAndDefaultRestoresOriginalOrder() = runTest(dispatcher) {
+    @Test fun mediaFlowChangesKeepSelectedSortAndDefaultRestoresNewestFirst() = runTest(dispatcher) {
         val images = MutableStateFlow(sortImages())
         val vm = GalleryViewModel(FakeRepository(), SavedStateHandle(), mediaSource(images)).also { store.put("sortFlow", it) }
         vm.onEvent(GalleryEvent.OpenArtist("a"))
@@ -214,7 +214,27 @@ class GalleryViewModelTest {
         runCurrent()
         assertEquals(listOf("new", "one"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.SetArtistImageSort(MediaSort.Default))
-        assertEquals(listOf("one", "new"), vm.state.value.mediaItems.map { it.id })
+        assertEquals(listOf("new", "one"), vm.state.value.mediaItems.map { it.id })
+    }
+
+    @Test fun explicitAddedAscendingChoicesRemainIndependentAndSurviveRecreation() = runTest(dispatcher) {
+        val options = BrowseOptions(artistImageSorts = mapOf("a" to MediaSort.AddedAscending),
+            collectionMediaSorts = mapOf("c" to MediaSort.AddedAscending))
+        val preferences = SortPreferences(options)
+        val repository = FakeRepository()
+        val vm = GalleryViewModel(repository, SavedStateHandle(), mediaSource(flowOf(sortImages())), browsePreferences = preferences)
+            .also { store.put("explicitAscending", it) }
+        vm.onEvent(GalleryEvent.OpenArtist("a")); runCurrent()
+        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
+        vm.onEvent(GalleryEvent.OpenCollection("c", "a")); runCurrent()
+        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
+        val restored = GalleryViewModel(repository, SavedStateHandle(mapOf("route" to arrayListOf("collection", "c", "a"))),
+            mediaSource(flowOf(sortImages())), browsePreferences = preferences).also { store.put("explicitAscendingRestored", it) }
+        runCurrent()
+        assertEquals(listOf("one", "two", "ten"), restored.state.value.mediaItems.map { it.id })
+        assertEquals(options, preferences.options.value)
+        assertEquals(0, preferences.saves)
+        assertEquals(0, repository.writes)
     }
 
     @Test fun preferencesReorderParentArtistCacheBeforeReturningMediaFlowEmits() = runTest(dispatcher) {
@@ -260,7 +280,7 @@ class GalleryViewModelTest {
             .also { store.put("sortRoutes", it) }
         vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
         runCurrent()
-        assertEquals(sortImages(), vm.state.value.mediaItems)
+        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.SetArtistImageSort(MediaSort.NameDescending))
         vm.onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistImageSort))
         assertEquals(GalleryDialog.None, vm.state.value.dialog)
@@ -501,11 +521,11 @@ class GalleryViewModelTest {
         val vm = GalleryViewModel(repository, SavedStateHandle(), mediaSource(flowOf(sortImages())), browsePreferences = preferences)
             .also { store.put("collectionSorts", it) }
         vm.onEvent(GalleryEvent.OpenCollection("c", "a")); runCurrent()
-        assertEquals(listOf("ten", "one", "two"), vm.state.value.mediaItems.map { it.id })
+        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.SizeAscending))
         assertEquals(listOf("two", "one", "ten"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.OpenCollection("other", "a")); runCurrent()
-        assertEquals(listOf("ten", "one", "two"), vm.state.value.mediaItems.map { it.id })
+        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.NameDescending)); runCurrent()
         assertEquals(mapOf("c" to MediaSort.SizeAscending, "other" to MediaSort.NameDescending), preferences.options.value.collectionMediaSorts)
         val restored = GalleryViewModel(repository, SavedStateHandle(mapOf("route" to arrayListOf("collection", "c", "a"))),
@@ -515,7 +535,7 @@ class GalleryViewModelTest {
         assertEquals(0, repository.writes)
     }
 
-    @Test fun collectionSortAcceptsFlowChangesAndExternalChoicesThenReturnsToManualOrder() = runTest(dispatcher) {
+    @Test fun collectionSortAcceptsFlowChangesAndExternalChoicesThenReturnsToNaturalNameDefault() = runTest(dispatcher) {
         val images = MutableStateFlow(sortImages())
         val preferences = SortPreferences()
         val vm = GalleryViewModel(FakeRepository(), SavedStateHandle(), mediaSource(images), browsePreferences = preferences)
@@ -523,10 +543,10 @@ class GalleryViewModelTest {
         vm.onEvent(GalleryEvent.OpenCollection("c", "a")); runCurrent()
         preferences.save(BrowseOptions(collectionMediaSorts = mapOf("c" to MediaSort.AddedDescending))); runCurrent()
         assertEquals(listOf("ten", "two", "one"), vm.state.value.mediaItems.map { it.id })
-        images.value = listOf(sortImages()[1], sortImages()[2].copy(id = "new", createdAt = 40)); runCurrent()
-        assertEquals(listOf("new", "one"), vm.state.value.mediaItems.map { it.id })
-        vm.onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.Default))
+        images.value = listOf(sortImages()[1], sortImages()[2].copy(id = "new", name = "0.png", createdAt = 5)); runCurrent()
         assertEquals(listOf("one", "new"), vm.state.value.mediaItems.map { it.id })
+        vm.onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.Default))
+        assertEquals(listOf("new", "one"), vm.state.value.mediaItems.map { it.id })
     }
 
     @Test fun collectionViewerFollowsSortedImagesSkipsVideoAndKeepsComicDirectionSeparate() = runTest(dispatcher) {
@@ -555,7 +575,7 @@ class GalleryViewModelTest {
             .also { store.put("collectionGuards", it) }
         vm.onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.NameDescending))
         vm.onEvent(GalleryEvent.OpenArtist("a")); runCurrent()
-        assertEquals(listOf("one", "two", "ten"), vm.state.value.mediaItems.map { it.id })
+        assertEquals(listOf("ten", "two", "one"), vm.state.value.mediaItems.map { it.id })
         vm.onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.NameDescending))
         vm.onEvent(GalleryEvent.OpenUnassigned); runCurrent()
         assertEquals(sortImages(), vm.state.value.mediaItems)
@@ -582,6 +602,83 @@ class GalleryViewModelTest {
         assertEquals(GalleryRoute.Collection("c", "a"), restored.state.value.route)
         assertEquals(GalleryDialog.None, restored.state.value.dialog)
         assertEquals(0, preferences.saves)
+    }
+
+    @Test fun artistVideoOpensExistingPlayerWhileImageSteppingSkipsVideos() = runTest(dispatcher) {
+        val items = sortImages().map { if (it.id == "two") it.copy(type = MediaType.VIDEO, name = "2.mp4") else it }
+        val vm = GalleryViewModel(FakeRepository(), SavedStateHandle(), mediaSource(flowOf(items)))
+            .also { store.put("artistVideo", it) }
+        vm.onEvent(GalleryEvent.OpenArtist("a")); runCurrent()
+        vm.onEvent(GalleryEvent.OpenMedia("two"))
+        assertEquals(GalleryOverlay.VideoPlayer("two"), vm.state.value.overlay)
+        vm.onEvent(GalleryEvent.StepViewer(1))
+        assertEquals(GalleryOverlay.VideoPlayer("two"), vm.state.value.overlay)
+        vm.onEvent(GalleryEvent.CloseOverlay)
+        vm.onEvent(GalleryEvent.OpenMedia("ten")); vm.onEvent(GalleryEvent.StepViewer(1))
+        assertEquals(GalleryOverlay.CardViewer("one"), vm.state.value.overlay)
+        vm.onEvent(GalleryEvent.StepViewer(-1))
+        assertEquals(GalleryOverlay.CardViewer("ten"), vm.state.value.overlay)
+        vm.onEvent(GalleryEvent.CloseOverlay); vm.onEvent(GalleryEvent.OpenComic)
+        assertEquals(GalleryOverlay.None, vm.state.value.overlay)
+    }
+
+    @Test fun artistVideoParticipatesInSortsAndSelectionOnlyRequestsDeletionConfirmation() = runTest(dispatcher) {
+        val items = MutableStateFlow(sortImages().map { if (it.id == "two") it.copy(type = MediaType.VIDEO) else it })
+        val vm = GalleryViewModel(FakeRepository(), SavedStateHandle(), mediaSource(items))
+            .also { store.put("artistVideoSort", it) }
+        vm.onEvent(GalleryEvent.OpenArtist("a")); runCurrent()
+        assertEquals(listOf("ten", "two", "one"), vm.state.value.mediaItems.map { it.id })
+        vm.onEvent(GalleryEvent.SetArtistImageSort(MediaSort.SizeAscending))
+        assertEquals(listOf("two", "one", "ten"), vm.state.value.mediaItems.map { it.id })
+        vm.onEvent(GalleryEvent.SetArtistImageSort(MediaSort.NameDescending))
+        assertEquals(listOf("ten", "two", "one"), vm.state.value.mediaItems.map { it.id })
+        vm.onEvent(GalleryEvent.StartMediaSelection("two"))
+        vm.onEvent(GalleryEvent.OpenMedia("one"))
+        assertEquals(GalleryOverlay.None, vm.state.value.overlay)
+        assertEquals(setOf("two", "one"), vm.state.value.selectedMediaIds)
+        vm.onEvent(GalleryEvent.OpenDeleteSelectedMedia)
+        assertEquals(GalleryDialog.DeleteSelectedMedia(listOf("two", "one")), vm.state.value.dialog)
+        vm.onEvent(GalleryEvent.DismissDialog)
+        items.value = items.value.filter { it.id != "two" }; runCurrent()
+        assertEquals(setOf("one"), vm.state.value.selectedMediaIds)
+        vm.onEvent(GalleryEvent.ExitMediaSelection); vm.onEvent(GalleryEvent.OpenMedia("two"))
+        assertEquals(GalleryOverlay.None, vm.state.value.overlay)
+    }
+
+    @Test fun coverCandidatesExcludeVideosAndVideoConfirmationNeverWrites() = runTest(dispatcher) {
+        val items = sortImages() + MediaAssetSummary("video", "movie.mp4", MediaType.VIDEO, 400, 3, "movie.mp4", "video", 40)
+        val vm = GalleryViewModel(FakeRepository(), SavedStateHandle(), mediaSource(flowOf(items)))
+            .also { store.put("videoCover", it) }
+        vm.onEvent(GalleryEvent.OpenArtist("a")); runCurrent()
+        vm.onEvent(GalleryEvent.OpenArtistCover("a")); runCurrent()
+        assertEquals(sortImages(), vm.state.value.coverItems)
+        vm.onEvent(GalleryEvent.SelectArtistCover("video")); vm.onEvent(GalleryEvent.ConfirmArtistCover)
+        assertFalse(vm.state.value.isSaving)
+        assertEquals("这张图片已不可用，请重新选择。", vm.state.value.fieldError)
+    }
+
+    @Test fun videoOnlyArtistCanPlayAndHasNoCoverCandidates() = runTest(dispatcher) {
+        val video = MediaAssetSummary("video", "only.mp4", MediaType.VIDEO, 400, 0, "only.mp4", "video", 40)
+        val repo = FakeRepository().apply { detailFlow = flowOf(ArtistDetail(ArtistSummary("a", "视频画师", 1, 0, videoCount = 1), emptyList())) }
+        val vm = GalleryViewModel(repo, SavedStateHandle(), mediaSource(flowOf(listOf(video))))
+            .also { store.put("videoOnlyArtist", it) }
+        vm.onEvent(GalleryEvent.OpenArtist("a")); runCurrent()
+        assertEquals(listOf(video), vm.state.value.mediaItems)
+        assertEquals(1, vm.state.value.artistDetail?.artist?.videoCount)
+        vm.onEvent(GalleryEvent.OpenMedia("video"))
+        assertEquals(GalleryOverlay.VideoPlayer("video"), vm.state.value.overlay)
+        vm.onEvent(GalleryEvent.CloseOverlay); vm.onEvent(GalleryEvent.OpenArtistCover("a")); runCurrent()
+        assertEquals(LoadState.Ready, vm.state.value.coverLoadState)
+        assertTrue(vm.state.value.coverItems.isEmpty())
+        assertEquals(0, repo.writes)
+    }
+
+    @Test fun unassignedVideoKeepsItsExistingOpenRestriction() = runTest(dispatcher) {
+        val video = MediaAssetSummary("video", "loose.mp4", MediaType.VIDEO, 400, 0, "loose.mp4", "video", 40)
+        val vm = GalleryViewModel(FakeRepository(), SavedStateHandle(), mediaSource(flowOf(listOf(video))))
+            .also { store.put("unassignedVideo", it) }
+        vm.onEvent(GalleryEvent.OpenUnassigned); runCurrent(); vm.onEvent(GalleryEvent.OpenMedia("video"))
+        assertEquals(GalleryOverlay.None, vm.state.value.overlay)
     }
 
     private class FakeRepository : GalleryRepository {

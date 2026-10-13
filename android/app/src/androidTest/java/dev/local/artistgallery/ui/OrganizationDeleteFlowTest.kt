@@ -200,7 +200,58 @@ class OrganizationDeleteFlowTest {
         assertNull(repository.getAsset(blocked.id))
         assertTrue(files.hasOriginal(untouched.storageKey))
         assertNotNull(dao.getArtist("a"))
-        assertNotNull(dao.getCollection("foreign"))
+        assertNull(dao.getCollection("foreign"))
+    }
+
+    @Test fun selectedCollectionsAlreadyRemovedBySharedCopyCleanupStillCompleteSuccessfully() = runBlocking {
+        artist("a", "c", "d", "empty"); artist("other", "foreign")
+        val shared = asset("shared", "c", "d", "foreign")
+        select(EntitySelectionKind.Collections, "c", "d")
+        val state = confirm()
+        assertEquals(GalleryRoute.Artist("a"), state.route)
+        assertEquals(GalleryDialog.None, state.dialog)
+        assertNull(state.entitySelectionKind)
+        assertTrue(state.selectedEntityIds.isEmpty())
+        assertNull(state.fieldError)
+        val dao = database.galleryDao()
+        assertNull(dao.getCollection("c")); assertNull(dao.getCollection("d")); assertNull(dao.getCollection("foreign"))
+        assertNotNull(dao.getCollection("empty"))
+        assertNotNull(dao.getArtist("a")); assertNotNull(dao.getArtist("other"))
+        assertNull(repository.getAsset(shared.id)); assertFalse(files.hasOriginal(shared.storageKey))
+    }
+
+    @Test fun deletingLastMediaClosesCurrentCollectionAndLeavesSourceAndArtists() = runBlocking {
+        artist("a", "c", "empty"); artist("other", "shared")
+        val image = asset("image", "c", "shared")
+        val source = File(testRoot, "source-outside-gallery.png")
+        requireTestPath(source)
+        source.writeText("unchanged source")
+        withContext(Dispatchers.Main) {
+            model = GalleryViewModel(repository, SavedStateHandle(), repository, importer)
+            store.put("organization", model)
+            model.onEvent(GalleryEvent.OpenArtist("a"))
+        }
+        withTimeout(5_000) { model.state.first { it.loadState == LoadState.Ready && it.mediaLoadState == LoadState.Ready } }
+        withContext(Dispatchers.Main) { model.onEvent(GalleryEvent.OpenCollection("c", "a")) }
+        withTimeout(5_000) { model.state.first { it.loadState == LoadState.Ready && it.mediaItems.any { media -> media.id == image.id } } }
+        withContext(Dispatchers.Main) {
+            model.onEvent(GalleryEvent.OpenDeleteMedia(image.id))
+            model.onEvent(GalleryEvent.ConfirmDeleteMedia)
+        }
+        val state = withTimeout(5_000) { model.state.first {
+            !it.isSaving && it.route == GalleryRoute.Artist("a") && it.loadState == LoadState.Ready
+        } }
+        assertEquals(ArtistTab.Collections, state.artistTab)
+        assertEquals(GalleryDialog.None, state.dialog)
+        assertEquals(GalleryOverlay.None, state.overlay)
+        assertFalse(state.mediaSelectionMode)
+        assertNull(state.fieldError)
+        val dao = database.galleryDao()
+        assertNull(dao.getCollection("c")); assertNull(dao.getCollection("shared"))
+        assertNotNull(dao.getCollection("empty"))
+        assertNotNull(dao.getArtist("a")); assertNotNull(dao.getArtist("other"))
+        assertFalse(files.hasOriginal(image.storageKey))
+        assertEquals("unchanged source", source.readText())
     }
 
     @Test fun failedDatabaseCleanupLeavesPendingDeleteForRecoveryBeforeCollectionRetry() = runBlocking {

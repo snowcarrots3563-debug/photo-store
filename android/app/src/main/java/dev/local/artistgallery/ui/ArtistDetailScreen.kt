@@ -113,6 +113,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
         val rememberPosition = { currentOnEvent(GalleryEvent.RememberScrollPosition(scrollKey, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)) }
         DisposableEffect(listState, scrollKey) { onDispose { rememberPosition() } }
         val artist = detail.artist
+        val mediaLabel = if (artist.videoCount > 0) "全部媒体" else "全部图片"
         val selectingCollections = state.entitySelectionKind == EntitySelectionKind.Collections
         val reorder = rememberReorderRows(detail.collections.map { it.id }, state.artistTab == ArtistTab.Collections && selectingCollections && !state.isSaving, { listState.scrollBy(it) })
         val collectionsById = detail.collections.associateBy { it.id }
@@ -135,7 +136,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                         })
                     } else DDetailHeader(artist.name, { onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistMenu)) }, { rememberPosition(); onEvent(GalleryEvent.NavigateBack) }, onDoubleTap = scrollToTop)
                 }
-                Text("${artist.collectionCount} 个作品集 · ${artist.imageCount} 张图片", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.padding(vertical = 16.dp).testTag("artistSummary"))
+                Text("${artist.collectionCount} 个作品集 · ${artist.imageCount} 张图片" + if (artist.videoCount > 0) " · ${artist.videoCount} 个视频" else "", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.padding(vertical = 16.dp).testTag("artistSummary"))
                 Box(Modifier.fillMaxWidth().testTag("artistTabs").clipToBounds().layout { measurable, constraints ->
                     val placeable = measurable.measure(constraints)
                     tabsHeight = placeable.height.toFloat()
@@ -149,7 +150,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                             Box(Modifier.weight(1f).heightIn(min = 48.dp)
                                 .semantics { this.selected = selected }.clickable(enabled = !state.mediaSelectionMode && !selectingCollections && !state.isSaving, role = Role.Tab) { rememberPosition(); onEvent(GalleryEvent.SwitchArtistTab(tab)) }, contentAlignment = Alignment.Center) {
                                 Box(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(RoundedCornerShape(20.dp)).background(if (selected) Color.White else Color.Transparent).padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                                    Text(if (tab == ArtistTab.Images) "全部图片" else "作品集", fontSize = 15.sp, color = if (selected) DColors.Action else DColors.Ink)
+                                    Text(if (tab == ArtistTab.Images) mediaLabel else "作品集", fontSize = 15.sp, color = if (selected) DColors.Action else DColors.Ink)
                                 }
                             }
                         }
@@ -157,9 +158,9 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                 }
                 Row(Modifier.fillMaxWidth().padding(bottom = 12.dp).testTag("artistSection"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     if (state.artistTab == ArtistTab.Images) {
-                        Text("全部图片 · ${artist.imageCount}", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted)
+                        Text("$mediaLabel · ${artist.imageCount + artist.videoCount}", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.weight(1f))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            DIconButton(DIcon.SortArrows, "图片排序", !state.isSaving && !state.mediaSelectionMode,
+                            DIconButton(DIcon.SortArrows, if (artist.videoCount > 0) "媒体排序" else "图片排序", !state.isSaving && !state.mediaSelectionMode,
                                 tint = if (imageSort == MediaSort.Default) DColors.Ink else DColors.Action) {
                                 rememberPosition(); onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistImageSort))
                             }

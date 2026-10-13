@@ -4,6 +4,10 @@ import dev.local.artistgallery.data.ArtistEntity
 import dev.local.artistgallery.data.BrowseOptions
 import dev.local.artistgallery.data.CollectionEntity
 import dev.local.artistgallery.model.MediaSort
+import dev.local.artistgallery.model.MediaAssetSummary
+import dev.local.artistgallery.model.MediaType
+import dev.local.artistgallery.model.sortArtistImages
+import dev.local.artistgallery.model.sortCollectionMedia
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -27,6 +31,9 @@ class RestoreImageSortRulesTest {
         val result = RestoreRules.preferences(BrowseOptions(), manifest(emptyMap()), mapOf(source.id to restored.id),
             emptyMap(), listOf(restored), emptyList())
         assertEquals(mapOf(restored.id to MediaSort.Default), result.artistImageSorts)
+        val media = listOf(MediaAssetSummary("old", "2.png", MediaType.IMAGE, 1, 0, "2.png", "old", 1),
+            MediaAssetSummary("new", "10.png", MediaType.IMAGE, 1, 1, "10.png", "new", 2))
+        assertEquals(listOf("new", "old"), sortArtistImages(media, result.artistImageSorts.getValue(restored.id)).map { it.id })
     }
 
     @Test fun removedRestoredArtistDoesNotReintroduceItsSort() {
@@ -62,10 +69,14 @@ class RestoreImageSortRulesTest {
         assertFalse(sourceCollection.id in result.collectionMediaSorts)
     }
 
-    @Test fun legacyBackupCreatesExplicitManualDefaultForRestoredCollection() {
+    @Test fun legacyBackupCreatesExplicitNaturalNameDefaultForRestoredCollection() {
         val result = RestoreRules.preferences(BrowseOptions(), collectionManifest(emptyMap()), mapOf(source.id to restored.id),
             mapOf(sourceCollection.id to restoredCollection.id), listOf(restored), listOf(restoredCollection))
         assertEquals(mapOf(restoredCollection.id to MediaSort.Default), result.collectionMediaSorts)
+        val media = listOf(MediaAssetSummary("ten", "10.png", MediaType.IMAGE, 1, 0, "10.png", "ten", 1),
+            MediaAssetSummary("two", "2.png", MediaType.IMAGE, 1, 1, "2.png", "two", 2))
+        assertEquals(listOf("two", "ten"), sortCollectionMedia(media, result.collectionMediaSorts.getValue(restoredCollection.id)).map { it.id })
+        assertEquals(listOf(0, 1), media.map { it.manualOrder })
     }
 
     @Test fun removedRestoredCollectionDoesNotReintroduceItsSort() {

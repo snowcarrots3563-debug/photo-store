@@ -6,16 +6,23 @@ import dev.local.artistgallery.data.GalleryRepository
 import dev.local.artistgallery.data.MediaLibraryRepository
 import dev.local.artistgallery.model.*
 import java.lang.reflect.Proxy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, InternalCoroutinesApi::class)
 class GalleryReturnStateTest {
     private val dispatcher = StandardTestDispatcher()
     private val store = ViewModelStore()
@@ -140,7 +147,7 @@ class GalleryReturnStateTest {
         assertTrue(vm.state.value.mediaItems.isEmpty())
     }
 
-    @Test fun failedCollectionDoesNotEraseAlreadyReadyParent() = runTest(dispatcher) {
+    @Test fun removedLoadedCollectionReturnsToCollectionsWithoutErasingReadyParent() = runTest(dispatcher) {
         val repo = ReturnRepository()
         val media = ReturnMedia()
         val vm = model(repo, media)
@@ -149,25 +156,164 @@ class GalleryReturnStateTest {
         val parentImages = vm.state.value.mediaItems
         vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
         runCurrent()
+        repo.detail.value = repo.detail.value!!.copy(collections = emptyList())
         repo.collection.value = null
         runCurrent()
-        assertEquals(LoadState.Failed, vm.state.value.loadState)
-        vm.onEvent(GalleryEvent.NavigateBack)
+        assertEquals(GalleryRoute.Artist("a"), vm.state.value.route)
+        assertEquals(ArtistTab.Collections, vm.state.value.artistTab)
         assertEquals(LoadState.Ready, vm.state.value.loadState)
         assertEquals(LoadState.Ready, vm.state.value.mediaLoadState)
         assertEquals(repo.detail.value, vm.state.value.artistDetail)
-        assertSame(parentImages, vm.state.value.mediaItems)
+        assertEquals(parentImages, vm.state.value.mediaItems)
         assertEquals(listOf("first", "second"), vm.state.value.mediaItems.map { it.id })
         runCurrent()
         assertEquals(LoadState.Ready, vm.state.value.loadState)
     }
 
+    @Test fun initiallyMissingCollectionRemainsAnErrorInsteadOfNavigating() = runTest(dispatcher) {
+        val repo = ReturnRepository().apply { collection.value = null }
+        val vm = model(repo, ReturnMedia())
+        vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
+        runCurrent()
+        assertEquals(GalleryRoute.Collection("c", "a"), vm.state.value.route)
+        assertEquals(LoadState.Failed, vm.state.value.loadState)
+    }
+
+    @Test fun missingParentDoesNotRedirectRemovedLoadedCollection() = runTest(dispatcher) {
+        val repo = ReturnRepository()
+        val vm = model(repo, ReturnMedia())
+        vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
+        runCurrent()
+        repo.detail.value = null
+        repo.collection.value = null
+        runCurrent()
+        assertEquals(GalleryRoute.Collection("c", "a"), vm.state.value.route)
+        assertEquals(LoadState.Failed, vm.state.value.loadState)
+    }
+
+    @Test fun removedLoadedCollectionWithoutParentSnapshotReturnsToCollections() = runTest(dispatcher) {
+        val repo = ReturnRepository()
+        val vm = model(repo, ReturnMedia())
+        vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
+        runCurrent()
+        repo.collection.value = null
+        runCurrent()
+        assertEquals(GalleryRoute.Artist("a"), vm.state.value.route)
+        assertEquals(ArtistTab.Collections, vm.state.value.artistTab)
+        assertEquals(LoadState.Ready, vm.state.value.loadState)
+        assertNull(vm.state.value.collection)
+    }
+
+    @Test fun cancelledDetailEmissionCannotOverwriteReenteredArtistWithSameId() = runTest(dispatcher) {
+        val repo = ReturnRepository()
+        var releaseLateEmission: (() -> Unit)? = null
+        repo.artistSource = object : Flow<ArtistDetail?> {
+            override suspend fun collect(collector: FlowCollector<ArtistDetail?>) {
+                collector.emit(repo.detail.value)
+                try { awaitCancellation() } catch (_: CancellationException) {
+                    suspendCoroutine<Unit> { continuation -> releaseLateEmission = { continuation.resume(Unit) } }
+                    assertFalse(currentCoroutineContext().isActive)
+                    collector.emit(null)
+                }
+            }
+        }
+        val vm = model(repo, ReturnMedia())
+        vm.onEvent(GalleryEvent.OpenArtist("a"))
+        runCurrent()
+        repo.artistSource = repo.detail
+        vm.onEvent(GalleryEvent.OpenManage)
+        vm.onEvent(GalleryEvent.OpenArtist("a"))
+        runCurrent()
+        assertNotNull(releaseLateEmission)
+        releaseLateEmission!!.invoke()
+        runCurrent()
+        assertEquals(GalleryRoute.Artist("a"), vm.state.value.route)
+        assertEquals(LoadState.Ready, vm.state.value.loadState)
+        assertEquals(repo.detail.value, vm.state.value.artistDetail)
+    }
+
+    @Test fun cancelledMediaEmissionCannotOverwriteManageOrReenteredCollection() = runTest(dispatcher) {
+        val repo = ReturnRepository()
+        val media = ReturnMedia()
+        val releaseLateEmissions = mutableListOf<() -> Unit>()
+        media.collectionSource = object : Flow<List<MediaAssetSummary>> {
+            override suspend fun collect(collector: FlowCollector<List<MediaAssetSummary>>) {
+                collector.emit(listOf(image("second")))
+                try { awaitCancellation() } catch (_: CancellationException) {
+                    suspendCoroutine<Unit> { continuation -> releaseLateEmissions += { continuation.resume(Unit) } }
+                    assertFalse(currentCoroutineContext().isActive)
+                    collector.emit(listOf(image("stale")))
+                }
+            }
+        }
+        val vm = model(repo, media)
+        vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
+        runCurrent()
+        vm.onEvent(GalleryEvent.OpenManage)
+        runCurrent()
+        assertEquals(1, releaseLateEmissions.size)
+        releaseLateEmissions.first().invoke()
+        runCurrent()
+        assertEquals(GalleryRoute.Manage, vm.state.value.route)
+        assertTrue(vm.state.value.mediaItems.isEmpty())
+        vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
+        runCurrent()
+        media.collectionSource = flowOf(listOf(image("new")))
+        vm.onEvent(GalleryEvent.OpenManage)
+        vm.onEvent(GalleryEvent.OpenCollection("c", "a"))
+        runCurrent()
+        assertEquals(2, releaseLateEmissions.size)
+        releaseLateEmissions.last().invoke()
+        runCurrent()
+        assertEquals(GalleryRoute.Collection("c", "a"), vm.state.value.route)
+        assertEquals(listOf(image("new")), vm.state.value.mediaItems)
+        assertEquals(LoadState.Ready, vm.state.value.mediaLoadState)
+    }
+
+    @Test fun cancelledDetailAndMediaErrorsCannotMarkAnotherRouteFailed() = runTest(dispatcher) {
+        val repo = ReturnRepository()
+        val media = ReturnMedia()
+        val releaseLateErrors = mutableListOf<() -> Unit>()
+        repo.artistSource = object : Flow<ArtistDetail?> {
+            override suspend fun collect(collector: FlowCollector<ArtistDetail?>) {
+                collector.emit(repo.detail.value)
+                try { awaitCancellation() } catch (_: CancellationException) {
+                    suspendCoroutine<Unit> { continuation -> releaseLateErrors += { continuation.resume(Unit) } }
+                    assertFalse(currentCoroutineContext().isActive)
+                    error("late detail failure")
+                }
+            }
+        }
+        media.artistSource = object : Flow<List<MediaAssetSummary>> {
+            override suspend fun collect(collector: FlowCollector<List<MediaAssetSummary>>) {
+                collector.emit(media.images.value)
+                try { awaitCancellation() } catch (_: CancellationException) {
+                    suspendCoroutine<Unit> { continuation -> releaseLateErrors += { continuation.resume(Unit) } }
+                    assertFalse(currentCoroutineContext().isActive)
+                    error("late media failure")
+                }
+            }
+        }
+        val vm = model(repo, media)
+        vm.onEvent(GalleryEvent.OpenArtist("a"))
+        runCurrent()
+        vm.onEvent(GalleryEvent.OpenManage)
+        runCurrent()
+        assertEquals(2, releaseLateErrors.size)
+        releaseLateErrors.forEach { it() }
+        runCurrent()
+        assertEquals(GalleryRoute.Manage, vm.state.value.route)
+        assertEquals(LoadState.Ready, vm.state.value.loadState)
+        assertEquals(LoadState.Ready, vm.state.value.mediaLoadState)
+    }
+
     private class ReturnRepository : GalleryRepository {
         val collection = MutableStateFlow<CollectionSummary?>(CollectionSummary("c", "a", "作品集", false, 1, 0))
         val detail = MutableStateFlow<ArtistDetail?>(ArtistDetail(ArtistSummary("a", "画师", 1, 2), listOf(collection.value!!)))
+        var artistSource: Flow<ArtistDetail?> = detail
         var artistSubscriptions = 0
         override fun observeArtists(): Flow<List<ArtistSummary>> = flowOf(emptyList())
-        override fun observeArtist(id: String): Flow<ArtistDetail?> = flow { artistSubscriptions++; emitAll(detail) }
+        override fun observeArtist(id: String): Flow<ArtistDetail?> { artistSubscriptions++; return artistSource }
         override fun observeCollection(id: String): Flow<CollectionSummary?> = collection
         override suspend fun createArtist(name: String): SaveResult = error("浏览不应写入")
         override suspend fun renameArtist(id: String, name: String): SaveResult = error("浏览不应写入")
@@ -178,11 +324,12 @@ class GalleryReturnStateTest {
     private class ReturnMedia {
         val images = MutableStateFlow(listOf(image("first"), image("second")))
         var artistSource: Flow<List<MediaAssetSummary>> = images
+        var collectionSource: Flow<List<MediaAssetSummary>> = flowOf(listOf(image("second")))
         var artistSubscriptions = 0
         val repository = Proxy.newProxyInstance(MediaLibraryRepository::class.java.classLoader, arrayOf(MediaLibraryRepository::class.java)) { _, method, _ ->
             when (method.name) {
-                "observeArtistImages" -> flow { artistSubscriptions++; emitAll(artistSource) }
-                "observeCollectionMedia" -> flowOf(listOf(image("second")))
+                "observeArtistImages" -> { artistSubscriptions++; artistSource }
+                "observeCollectionMedia" -> collectionSource
                 "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchSummary>())
                 else -> error("浏览不应调用 ${method.name}")
             }

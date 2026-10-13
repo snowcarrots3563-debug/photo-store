@@ -9,11 +9,11 @@ class MediaSortTest {
 
     private fun ids(items: List<MediaAssetSummary>, sort: MediaSort) = sortArtistImages(items, sort).map { it.id }
 
-    @Test fun defaultMatchesAddedAscendingAndCanBeRestoredAfterCustomSort() {
+    @Test fun defaultMatchesAddedDescendingAndCanBeRestoredAfterCustomSort() {
         val items = listOf(media("z", size = 1, added = 9), media("b", size = 5, added = 2), media("a", size = 3, added = 2))
-        assertEquals(listOf("a", "b", "z"), ids(items, MediaSort.Default))
-        assertEquals(ids(items, MediaSort.Default), ids(items, MediaSort.AddedAscending))
-        assertEquals(listOf("a", "b", "z"), ids(sortArtistImages(items, MediaSort.SizeDescending), MediaSort.Default))
+        assertEquals(listOf("z", "a", "b"), ids(items, MediaSort.Default))
+        assertEquals(ids(items, MediaSort.Default), ids(items, MediaSort.AddedDescending))
+        assertEquals(listOf("z", "a", "b"), ids(sortArtistImages(items, MediaSort.SizeDescending), MediaSort.Default))
     }
 
     @Test fun sizeUsesLongComparisonInBothDirections() {
@@ -76,11 +76,18 @@ class MediaSortTest {
         assertEquals(0L, MediaAssetSummary("id", "name", MediaType.IMAGE, 1, 0, "name", "key").createdAt)
     }
 
-    @Test fun collectionDefaultUsesManualOrderThenIdInsteadOfAddedTime() {
-        val items = listOf(media("z", added = 1).copy(manualOrder = 7), media("b", added = 9).copy(manualOrder = 2),
-            media("a", added = 8).copy(manualOrder = 2))
+    @Test fun collectionDefaultUsesNaturalNamesInsteadOfManualOrderOrAddedTime() {
+        val items = listOf(media("z", "z.png", added = 1).copy(manualOrder = 0), media("b", "10.png", added = 9).copy(manualOrder = 1),
+            media("a", "2.png", added = 8).copy(manualOrder = 2))
         assertEquals(listOf("a", "b", "z"), sortCollectionMedia(items, MediaSort.Default).map { it.id })
+        assertEquals(sortCollectionMedia(items, MediaSort.NameAscending), sortCollectionMedia(items, MediaSort.Default))
         assertEquals(listOf("z", "a", "b"), sortCollectionMedia(items, MediaSort.AddedAscending).map { it.id })
+    }
+
+    @Test fun collectionDefaultOrdersNumbersNaturallyAndLettersFromAToZ() {
+        val items = listOf(media("z", "Z.png"), media("aTen", "a10.png"), media("b", "B.png"),
+            media("ten", "10.png"), media("aTwo", "A2.png"), media("two", "2.png"))
+        assertEquals(listOf("two", "ten", "aTwo", "aTen", "b", "z"), sortCollectionMedia(items, MediaSort.Default).map { it.id })
     }
 
     @Test fun collectionCustomSortsUseDisplayNameSizeAndAddedTimeIncludingVideos() {
@@ -101,11 +108,11 @@ class MediaSortTest {
         MediaSort.entries.forEach { assertEquals(it.name, listOf("a", "b", "z"), sortCollectionMedia(items, it).map { it.id }) }
     }
 
-    @Test fun collectionCanReturnToManualOrderAfterEveryCustomSortWithoutChangingSource() {
+    @Test fun collectionCanReturnToNaturalNameDefaultAfterEveryCustomSortWithoutChangingSourceOrManualOrder() {
         val items = listOf(media("last", "1.png", size = 1, added = 1).copy(manualOrder = 9),
             media("first", "10.png", size = 9, added = 9).copy(manualOrder = 0))
         MediaSort.entries.forEach { sort ->
-            assertEquals(listOf("first", "last"), sortCollectionMedia(sortCollectionMedia(items, sort), MediaSort.Default).map { it.id })
+            assertEquals(listOf("last", "first"), sortCollectionMedia(sortCollectionMedia(items, sort), MediaSort.Default).map { it.id })
         }
         assertEquals(listOf("last", "first"), items.map { it.id })
         assertEquals(listOf(9, 0), items.map { it.manualOrder })

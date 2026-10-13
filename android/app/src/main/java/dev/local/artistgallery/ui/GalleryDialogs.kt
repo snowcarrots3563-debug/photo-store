@@ -49,7 +49,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
         val artistId = (state.route as? GalleryRoute.Artist)?.id ?: return
         if (state.artistTab != ArtistTab.Images || state.mediaSelectionMode || state.entitySelectionKind != null ||
             state.isSaving || state.overlay != GalleryOverlay.None) return
-        ImportTargetOptionDialog("图片排序", MediaSort.entries.map { it.name to it.label },
+        ImportTargetOptionDialog(if ((state.artistDetail?.artist?.videoCount ?: 0) > 0) "媒体排序" else "图片排序", MediaSort.entries.map { it.name to it.label },
             (state.browseOptions.artistImageSorts[artistId] ?: MediaSort.Default).name,
             { onEvent(GalleryEvent.DismissDialog) }) { id ->
             onEvent(GalleryEvent.SetArtistImageSort(MediaSort.valueOf(id)))
@@ -60,7 +60,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
         val collectionId = (state.route as? GalleryRoute.Collection)?.id ?: return
         if (state.collection?.id != collectionId || state.loadState != LoadState.Ready || state.mediaLoadState != LoadState.Ready ||
             state.mediaSelectionMode || state.entitySelectionKind != null || state.isSaving || state.overlay != GalleryOverlay.None) return
-        ImportTargetOptionDialog("图集排序", MediaSort.entries.map { it.name to if (it == MediaSort.Default) "默认顺序（手动顺序）" else it.label },
+        ImportTargetOptionDialog("图集排序", MediaSort.entries.map { it.name to if (it == MediaSort.Default) "默认顺序（文件名称升序）" else it.label },
             (state.browseOptions.collectionMediaSorts[collectionId] ?: MediaSort.Default).name,
             { onEvent(GalleryEvent.DismissDialog) }) { id ->
             onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.valueOf(id)))
@@ -97,8 +97,8 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
         GalleryDialog.ImportProgress -> "正在导入"
         is GalleryDialog.ImportResult -> "导入结果"
         is GalleryDialog.RemoveLastReference -> "移除最后一个引用"
-        is GalleryDialog.DeleteMedia -> "删除图片"
-        is GalleryDialog.DeleteSelectedMedia -> "批量删除图片"
+        is GalleryDialog.DeleteMedia -> "删除媒体"
+        is GalleryDialog.DeleteSelectedMedia -> "批量删除媒体"
         is GalleryDialog.ArtistCover -> "更换画师封面"
         GalleryDialog.None -> ""
     }
@@ -180,7 +180,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
                     }
                     is GalleryDialog.DeleteArtist -> {
                         DialogHint("确认删除画师“${dialog.name}”？")
-                        DialogHint("将永久删除这位画师、全部作品集，以及其中的图片、GIF 和视频图库副本。共享副本也会彻底删除，并从其他画师和作品集中移除。此操作无法撤销。")
+                        DialogHint("将永久删除这位画师、全部作品集，以及其中的图片、GIF 和视频图库副本。共享副本也会彻底删除，并从其他画师和作品集中移除。因此变空的作品集也会自动删除。此操作无法撤销。")
                         DialogHint("相册、文件管理和压缩包里的源文件不受影响。")
                         state.fieldError?.let { Text(it, color = DColors.Error, fontSize = 13.sp) }
                         Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -197,7 +197,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
                         }
                         DialogHint(if (deletingArtists) "确认删除选中的 $count 位画师？" else "确认删除选中的 $count 个作品集？")
                         DialogHint(if (deletingArtists) "将永久删除这些画师、全部作品集，以及其中的图片、GIF 和视频图库副本。" else "将永久删除这些作品集，以及其中的图片、GIF 和视频图库副本。")
-                        DialogHint("共享副本也会彻底删除，并从其他画师和作品集中移除。此操作无法撤销。相册、文件管理和压缩包里的源文件不受影响。")
+                        DialogHint("共享副本也会彻底删除，并从其他画师和作品集中移除。因此变空的作品集也会自动删除。此操作无法撤销。相册、文件管理和压缩包里的源文件不受影响。")
                         state.fieldError?.let { Text(it, color = DColors.Error, fontSize = 13.sp) }
                         Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             DButton("取消", Modifier.weight(1f), enabled = !state.isSaving) { onEvent(GalleryEvent.DismissDialog) }
@@ -225,7 +225,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
                     is GalleryDialog.RemoveLastReference -> RemoveLastReferenceContent(onEvent)
                     is GalleryDialog.DeleteMedia -> {
                         DialogHint(dialog.name)
-                        DialogHint("删除图库中的这张图片，并移除所有画师及作品集中的引用。相册、文件管理和压缩包里的源文件不受影响。")
+                        DialogHint("删除这个图库副本，并移除所有画师及作品集中的引用。因此变空的作品集也会自动删除。相册、文件管理和压缩包里的源文件不受影响。")
                         state.fieldError?.let { Text(it, color = DColors.Error, fontSize = 13.sp) }
                         Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             DButton("取消", Modifier.weight(1f), enabled = !state.isSaving) { onEvent(GalleryEvent.DismissDialog) }
@@ -234,7 +234,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
                     }
                     is GalleryDialog.DeleteSelectedMedia -> {
                         DialogHint("已选择 ${dialog.assetIds.size} 项")
-                        DialogHint("删除这些图库副本，并移除所有画师及作品集中的对应引用。相册、文件管理和压缩包里的源文件不受影响。")
+                        DialogHint("删除这些图库副本，并移除所有画师及作品集中的对应引用。因此变空的作品集也会自动删除。相册、文件管理和压缩包里的源文件不受影响。")
                         state.fieldError?.let { Text(it, color = DColors.Error, fontSize = 13.sp) }
                         Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             DButton("取消", Modifier.weight(1f), enabled = !state.isSaving) { onEvent(GalleryEvent.DismissDialog) }
@@ -411,7 +411,7 @@ private fun ImportResultContent(state: GalleryUiState, dialog: GalleryDialog.Imp
 
 @Composable
 private fun RemoveLastReferenceContent(onEvent: (GalleryEvent) -> Unit) {
-    DialogHint("这是最后一个作品集引用。取消时不做任何更改；保留会移到未归组媒体；删除只删除图库副本，不会改动系统相册原文件。")
+    DialogHint("这是最后一个作品集引用。取消时不做任何更改；保留会移到未归组媒体；删除时因此变空的作品集也会自动删除，只删除图库副本，不会改动系统相册原文件。")
     Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         DButton("取消", Modifier.weight(1f)) { onEvent(GalleryEvent.DismissDialog) }
         DButton("保留", Modifier.weight(1f), soft = true) { onEvent(GalleryEvent.KeepLastReference) }

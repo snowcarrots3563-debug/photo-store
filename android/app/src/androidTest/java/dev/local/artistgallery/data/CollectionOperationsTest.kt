@@ -44,22 +44,34 @@ class CollectionOperationsTest {
         assertEquals(2, repository.referenceCount("shared"))
     }
 
-    @Test fun deletingCopiesGloballyClearsOtherReferencesAndCoversButKeepsOtherCollections() = runBlocking {
+    @Test fun deletingCopiesGloballyRemovesBothEmptiedCollectionsAndKeepsArtists() = runBlocking {
         seed()
         assertTrue(repository.setArtistCover("b", "shared"))
         repository.getCollectionAssets("c").forEach { asset ->
             if (asset.state == "READY") assertNotNull(repository.markAssetForDelete(asset.id))
             repository.completeAssetDelete(asset.id)
         }
-        assertTrue(repository.deleteCollectionIfEmpty("c"))
         val dao = database.galleryDao()
         assertNull(dao.getCollection("c"))
         assertNotNull(dao.getArtist("a"))
-        assertNotNull(dao.getCollection("d"))
+        assertNull(dao.getCollection("d"))
+        assertNotNull(dao.getArtist("b"))
         assertNull(dao.getArtist("b")!!.coverAssetId)
         assertEquals(0, repository.referenceCount("shared"))
         assertNull(repository.getAsset("shared"))
         assertFalse(repository.deleteCollectionIfEmpty("c"))
+    }
+
+    @Test fun referenceOnlyRemovalKeepsCopiesAndDoesNotAutoDeleteCollections() = runBlocking {
+        seed()
+        assertEquals(dev.local.artistgallery.model.ReferenceRemovalResult.REMOVED_SHARED,
+            repository.removeReference("d", "shared"))
+        assertTrue(repository.removeLastReferenceAndKeep("c", "shared"))
+        assertTrue(repository.removeLastReferenceAndKeep("c", "pending"))
+        val dao = database.galleryDao()
+        assertNotNull(dao.getCollection("c")); assertNotNull(dao.getCollection("d"))
+        assertNotNull(repository.getAsset("shared")); assertNotNull(repository.getAsset("pending"))
+        assertEquals(0, repository.referenceCount("shared")); assertEquals(0, repository.referenceCount("pending"))
     }
 
     @Test fun collectionDeleteStorageFailureIsReportedAndRetainsCollection() = runBlocking {

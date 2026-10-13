@@ -86,7 +86,7 @@ fun ArtistHomeScreen(state: GalleryUiState, padding: Dp, scrollToArtist: String?
                             }) {
                                 Column {
                                     if (index > 0) DDivider()
-                                    DRow(artist.name, "${artist.collectionCount} 个作品集 · ${artist.imageCount} 张图片", icon = DIcon.Artist, cover = artist.cover, fixtureCover = fixtureCover, previewDecoder = previewDecoder,
+                                    DRow(artist.name, "${artist.collectionCount} 个作品集 · ${artist.imageCount} 张图片" + if (artist.videoCount > 0) " · ${artist.videoCount} 个视频" else "", icon = DIcon.Artist, cover = artist.cover, fixtureCover = fixtureCover, previewDecoder = previewDecoder,
                                         onLongClick = if (selecting || state.isSaving) null else ({ onEvent(GalleryEvent.StartEntitySelection(EntitySelectionKind.Artists, artist.id)) }),
                                         trailing = if (selecting) ({
                                             Row(verticalAlignment = Alignment.CenterVertically) {

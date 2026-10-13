@@ -2,16 +2,16 @@ package dev.local.artistgallery.model
 
 enum class MediaSort(val label: String) {
     Default("默认顺序"),
-    SizeAscending("大小从小到大"), SizeDescending("大小从大到小"),
-    AddedAscending("加入时间从早到晚"), AddedDescending("加入时间从晚到早"),
-    NameAscending("名称升序"), NameDescending("名称降序"),
+    SizeAscending("文件大小（升序）"), SizeDescending("文件大小（降序）"),
+    AddedAscending("修改时间（升序）"), AddedDescending("修改时间（降序）"),
+    NameAscending("文件名称（升序）"), NameDescending("文件名称（降序）"),
 }
 
 fun sortArtistImages(items: List<MediaAssetSummary>, sort: MediaSort): List<MediaAssetSummary> =
     items.sortedWith { left, right ->
         val primary = when (sort) {
-            MediaSort.Default, MediaSort.AddedAscending -> left.createdAt.compareTo(right.createdAt)
-            MediaSort.AddedDescending -> right.createdAt.compareTo(left.createdAt)
+            MediaSort.AddedAscending -> left.createdAt.compareTo(right.createdAt)
+            MediaSort.Default, MediaSort.AddedDescending -> right.createdAt.compareTo(left.createdAt)
             MediaSort.SizeAscending -> left.byteSize.compareTo(right.byteSize)
             MediaSort.SizeDescending -> right.byteSize.compareTo(left.byteSize)
             MediaSort.NameAscending -> naturalCompare(left.name, right.name)
@@ -21,8 +21,7 @@ fun sortArtistImages(items: List<MediaAssetSummary>, sort: MediaSort): List<Medi
     }
 
 fun sortCollectionMedia(items: List<MediaAssetSummary>, sort: MediaSort): List<MediaAssetSummary> =
-    if (sort == MediaSort.Default) items.sortedWith(compareBy(MediaAssetSummary::manualOrder, MediaAssetSummary::id))
-    else sortArtistImages(items, sort)
+    sortArtistImages(items, if (sort == MediaSort.Default) MediaSort.NameAscending else sort)
 
 internal fun naturalCompare(left: String, right: String): Int {
     var i = 0

@@ -38,7 +38,7 @@ class FixtureGalleryRepository(scenario: String = "baseline") : GalleryRepositor
     private fun Snapshot.artistSummary(artist: Artist): ArtistSummary {
         val groups = collections.filter { it.artistId == artist.id }
         val references = groups.flatMap { it.assets }.distinct()
-        return ArtistSummary(artist.id, artist.name, groups.size, imageCount(references), cover(references))
+        return ArtistSummary(artist.id, artist.name, groups.size, imageCount(references), cover(references), references.count { assets[it]?.video == true })
     }
     override fun observeArtists(): Flow<List<ArtistSummary>> = flow {
         if (failRead) { failRead = false; throw IOException("调试验收：一次读取失败") }

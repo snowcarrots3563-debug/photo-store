@@ -67,7 +67,7 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit,
-                      onExport: ((String) -> Unit)? = null) {
+                      onExport: ((String) -> Unit)? = null, onShare: ((MediaAssetSummary) -> Unit)? = null) {
     val items = state.mediaItems.filter { it.type != MediaType.VIDEO }
     val index = items.indexOfFirst { it.id == assetId }
     val item = items.getOrNull(index)
@@ -229,12 +229,17 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
             if (onExport != null) onExport((items.getOrNull(pager.currentPage) ?: item).id)
             else onEvent(GalleryEvent.OpenDialog(GalleryDialog.Unavailable("导出这张图片", 5)))
         },
+        onShare = {
+            if (!pager.isScrollInProgress) items.getOrNull(pager.settledPage)?.let { selected -> onShare?.invoke(selected) }
+            showActions = false
+        },
+        shareEnabled = onShare != null && !pager.isScrollInProgress,
     )
     if (showOriginal && decoder != null) OriginalImageDialog(item, decoder) { showOriginal = false }
 }
 
 @Composable
-private fun ViewerActionsDialog(onClose: () -> Unit, onAdd: () -> Unit, onExport: () -> Unit) {
+private fun ViewerActionsDialog(onClose: () -> Unit, onAdd: () -> Unit, onExport: () -> Unit, onShare: () -> Unit, shareEnabled: Boolean) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(decorFitsSystemWindows = false)) {
         val dialogInsets = galleryDialogWindowInsets()
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f)).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)), contentAlignment = Alignment.BottomCenter) {
@@ -246,16 +251,17 @@ private fun ViewerActionsDialog(onClose: () -> Unit, onAdd: () -> Unit, onExport
                 Spacer(Modifier.height(8.dp))
                 ViewerActionRow("加入其他作品集", DIcon.Plus, onAdd)
                 ViewerActionRow("导出这张图片", DIcon.Export, onExport)
+                ViewerActionRow("分享这张图片", DIcon.Export, onShare, enabled = shareEnabled)
             }
         }
     }
 }
 
 @Composable
-private fun ViewerActionRow(label: String, icon: DIcon, onClick: () -> Unit) {
-    androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        DIconImage(icon, DColors.Ink)
-        Text(label, Modifier.weight(1f), fontSize = 15.sp)
+private fun ViewerActionRow(label: String, icon: DIcon, onClick: () -> Unit, enabled: Boolean = true) {
+    androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).clickable(enabled = enabled, onClick = onClick), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        DIconImage(icon, if (enabled) DColors.Ink else DColors.Muted)
+        Text(label, Modifier.weight(1f), color = if (enabled) DColors.Ink else DColors.Muted, fontSize = 15.sp)
         DIconImage(DIcon.Next, DColors.Muted, 18.dp)
     }
 }

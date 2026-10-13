@@ -46,7 +46,7 @@ fun MediaListItem(
         }
         when {
             onSelect != null -> Checkbox(checked = selected, onCheckedChange = { onSelect() })
-            onRemove != null -> DIconButton(DIcon.Trash, "删除图片", tint = DColors.Error, onClick = onRemove)
+            onRemove != null -> DIconButton(DIcon.Trash, if (item.type == MediaType.VIDEO) "删除视频" else "删除图片", tint = DColors.Error, onClick = onRemove)
         }
     }
 }

@@ -97,18 +97,18 @@ class ArtistSortUiTest {
         compose.onNodeWithTag("artistMediaList").performScrollToIndex(15)
         compose.onNodeWithContentDescription("图片排序").performClick()
         compose.runOnIdle { assertTrue(current.value.scrollPositions.getValue("artist:artist:Images:List:Default").index >= 15) }
-        compose.onNodeWithText(MediaSort.NameDescending.label).performScrollTo().performClick()
-        compose.onNodeWithText("图片 59.png").assertIsDisplayed()
+        compose.onNodeWithText(MediaSort.NameAscending.label).performScrollTo().performClick()
+        compose.onNodeWithText("图片 0.png").assertIsDisplayed()
         compose.onNodeWithTag("artistMediaList").performScrollToIndex(8)
         compose.onNodeWithContentDescription("图片排序").performClick()
-        compose.runOnIdle { assertTrue(current.value.scrollPositions.getValue("artist:artist:Images:List:NameDescending").index >= 8) }
+        compose.runOnIdle { assertTrue(current.value.scrollPositions.getValue("artist:artist:Images:List:NameAscending").index >= 8) }
         compose.onNodeWithText(MediaSort.Default.label).performScrollTo().performClick()
-        compose.onNodeWithText("图片 15.png").assertIsDisplayed()
-        compose.onNodeWithText("图片 0.png").assertDoesNotExist()
+        compose.onNodeWithText("图片 44.png").assertIsDisplayed()
+        compose.onNodeWithText("图片 59.png").assertDoesNotExist()
     }
 
     private fun initial() = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-        route = GalleryRoute.Artist("artist"), artistDetail = detail, mediaItems = images)
+        route = GalleryRoute.Artist("artist"), artistDetail = detail, mediaItems = sortArtistImages(images, MediaSort.Default))
 
     private fun show(state: GalleryUiState = initial()) {
         compose.activity.setContent {

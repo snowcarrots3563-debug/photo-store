@@ -39,6 +39,7 @@ import dev.local.artistgallery.data.importing.ImportResultKind
 import dev.local.artistgallery.data.importing.ImportResultTarget
 import dev.local.artistgallery.data.preview.AssetReader
 import dev.local.artistgallery.data.preview.PreviewDecoder
+import dev.local.artistgallery.data.preview.buildImageShareChooser
 import dev.local.artistgallery.model.SampleCoverKey
 import dev.local.artistgallery.ui.comic.ComicReaderScreen
 import dev.local.artistgallery.ui.viewer.ImageViewerScreen
@@ -54,7 +55,9 @@ import dev.local.artistgallery.ui.exporting.LocalTransferDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun GalleryApp(
@@ -204,8 +207,28 @@ fun GalleryApp(
                 }
                 when (val overlay = state.overlay) {
                     GalleryOverlay.None -> Unit
-                    is GalleryOverlay.CardViewer -> ImageViewerScreen(state, overlay.assetId, previewDecoder, vm::onEvent,
-                        onExport = localTransfer?.let { coordinator -> { id -> coordinator.openExport(ExportScope.Assets(listOf(id))) } })
+                    is GalleryOverlay.CardViewer -> {
+                        val shareScope = rememberCoroutineScope()
+                        var preparingShare by remember { mutableStateOf(false) }
+                        ImageViewerScreen(state, overlay.assetId, previewDecoder, vm::onEvent,
+                            onExport = localTransfer?.let { coordinator -> { id -> coordinator.openExport(ExportScope.Assets(listOf(id))) } },
+                            onShare = if (assetReader == null || preparingShare) null else { item ->
+                                if (!preparingShare) {
+                                    preparingShare = true
+                                    val requestedViewer = GalleryOverlay.CardViewer(item.id)
+                                    vm.onEvent(GalleryEvent.OpenMedia(item.id))
+                                    shareScope.launch {
+                                        try {
+                                            val chooser = withContext(Dispatchers.IO) { buildImageShareChooser(context, assetReader, item) }
+                                            if (vm.state.value.overlay == requestedViewer) context.startActivity(chooser)
+                                        } catch (cancelled: CancellationException) { throw cancelled }
+                                        catch (_: Exception) {
+                                            if (vm.state.value.overlay == requestedViewer) Toast.makeText(context, "无法分享这张图片，请确认原图仍存在且格式为 JPEG、PNG 或 GIF。", Toast.LENGTH_LONG).show()
+                                        } finally { preparingShare = false }
+                                    }
+                                }
+                            })
+                    }
                     is GalleryOverlay.VideoPlayer -> VideoPlayerScreen(state, overlay.assetId, assetReader, vm::onEvent)
                     GalleryOverlay.ComicReader -> ComicReaderScreen(state, previewDecoder, vm::onEvent)
                 }

@@ -301,17 +301,36 @@ class GalleryViewModel(
             try {
                 when (route) {
                     is GalleryRoute.Artist -> repository.observeArtist(route.id).collect { detail ->
+                        currentCoroutineContext().ensureActive()
+                        if (state.value.route != route) return@collect
                         change { current -> current.copy(artistDetail = orderedDetail(detail),
                             selectedEntityIds = if (current.entitySelectionKind == EntitySelectionKind.Collections)
                                 current.selectedEntityIds.intersect(detail?.collections.orEmpty().mapTo(mutableSetOf()) { it.id }) else current.selectedEntityIds,
                             loadState = if (detail == null) LoadState.Failed else LoadState.Ready) }
                     }
-                    is GalleryRoute.Collection -> combine(repository.observeArtist(route.artistId), repository.observeCollection(route.id)) { artist, collection -> artist to collection }
-                        .collect { (artist, collection) -> change { it.copy(artistDetail = orderedDetail(artist), collection = collection, loadState = if (artist == null || collection == null) LoadState.Failed else LoadState.Ready) } }
+                    is GalleryRoute.Collection -> {
+                        var loadedCollection = false
+                        combine(repository.observeArtist(route.artistId), repository.observeCollection(route.id)) { artist, collection -> artist to collection }
+                            .collect { (artist, collection) ->
+                                currentCoroutineContext().ensureActive()
+                                if (state.value.route != route) return@collect
+                                if (loadedCollection && collection == null && artist != null) {
+                                    parentArtist = parentArtist?.copy(tab = ArtistTab.Collections)
+                                    navigate(GalleryRoute.Artist(route.artistId), ArtistTab.Collections, returningToArtist = true)
+                                } else {
+                                    if (artist != null && collection != null) loadedCollection = true
+                                    change { it.copy(artistDetail = orderedDetail(artist), collection = collection,
+                                        loadState = if (artist == null || collection == null) LoadState.Failed else LoadState.Ready) }
+                                }
+                            }
+                    }
                     else -> Unit
                 }
             } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { change { it.copy(loadState = LoadState.Failed) } }
+            catch (_: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (state.value.route == route) change { it.copy(loadState = LoadState.Failed) }
+            }
         }
     }
 
@@ -329,8 +348,12 @@ class GalleryViewModel(
         mediaJob = viewModelScope.launch {
             source.catch { error ->
                 if (error is CancellationException) throw error
+                currentCoroutineContext().ensureActive()
+                if (state.value.route != route) return@catch
                 change { it.copy(loadState = LoadState.Failed, mediaLoadState = LoadState.Failed) }
             }.collect { items ->
+                currentCoroutineContext().ensureActive()
+                if (state.value.route != route) return@collect
                 change { current ->
                     val ids = items.mapTo(mutableSetOf()) { it.id }
                     current.copy(mediaItems = when (route) {
@@ -375,7 +398,7 @@ class GalleryViewModel(
         val item = state.value.mediaItems.firstOrNull { it.id == assetId } ?: return
         if (state.value.mediaSelectionMode) { onEvent(GalleryEvent.ToggleMediaSelection(assetId)); return }
         if (item.type == dev.local.artistgallery.model.MediaType.VIDEO) {
-            if (state.value.route is GalleryRoute.Collection) change { it.copy(overlay = GalleryOverlay.VideoPlayer(assetId)) }
+            if (state.value.route is GalleryRoute.Collection || state.value.route is GalleryRoute.Artist) change { it.copy(overlay = GalleryOverlay.VideoPlayer(assetId)) }
         } else {
             change { it.copy(overlay = GalleryOverlay.CardViewer(assetId)) }
         }
@@ -796,7 +819,7 @@ class GalleryViewModel(
             media.observeArtistImages(artistId).catch { error ->
                 if (error is CancellationException) throw error
                 change { it.copy(coverLoadState = LoadState.Failed) }
-            }.collect { images -> change { it.copy(coverItems = images, coverLoadState = LoadState.Ready) } }
+            }.collect { images -> change { it.copy(coverItems = images.filter { media -> media.type != dev.local.artistgallery.model.MediaType.VIDEO }, coverLoadState = LoadState.Ready) } }
         }
     }
 

@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.local.artistgallery.data.deleting.deleteMediaCopies
 import java.util.Collections
 import java.util.concurrent.Executor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -44,6 +45,7 @@ class BatchDeleteRepositoryTest {
         assertEquals(4, recorded.count { it.startsWith("UPDATE Artist SET coverAssetId = NULL WHERE coverAssetId IN") })
         assertEquals(4, recorded.count { it.startsWith("DELETE FROM CollectionMedia WHERE assetId IN") })
         assertEquals(4, recorded.count { it.startsWith("DELETE FROM MediaAsset WHERE id IN") })
+        assertEquals(4, recorded.count { it.trimStart().startsWith("DELETE FROM WorkCollection WHERE id IN") })
         assertFalse(recorded.any { it.startsWith("UPDATE MediaAsset SET state = 'PENDING_DELETE' WHERE id =") })
         assertTrue(dao.allAssets().isEmpty())
     }
@@ -112,7 +114,9 @@ class BatchDeleteRepositoryTest {
         assertEquals(0, repository.referenceCount("first"))
         assertNull(dao.getArtist("a")!!.coverAssetId)
         assertNull(dao.getArtist("b")!!.coverAssetId)
-        assertTrue(repository.deleteCollectionIfEmpty("c"))
+        assertNull(dao.getCollection("c"))
+        assertNull(dao.getCollection("d"))
+        assertFalse(repository.deleteCollectionIfEmpty("c"))
     }
 
     @Test fun joinCandidatesMatchExistsIncludingPendingAndSharedAssetsInStableOrder() = runBlocking {
@@ -153,7 +157,8 @@ class BatchDeleteRepositoryTest {
         repository.finishAssetDeletes(emptyList(), emptyList())
         val recorded = synchronized(queries) { queries.toList() }
         assertFalse(recorded.any { it.startsWith("UPDATE MediaAsset") || it.startsWith("DELETE FROM MediaAsset") ||
-            it.startsWith("DELETE FROM CollectionMedia") || it.startsWith("UPDATE Artist") || it.startsWith("SELECT * FROM MediaAsset WHERE id IN") })
+            it.startsWith("DELETE FROM CollectionMedia") || it.trimStart().startsWith("DELETE FROM WorkCollection") ||
+            it.startsWith("UPDATE Artist") || it.startsWith("SELECT * FROM MediaAsset WHERE id IN") })
         suspend fun rejects(operation: suspend () -> Unit) {
             try { operation(); fail("expected batch guard") } catch (_: IllegalArgumentException) { }
         }
@@ -166,6 +171,7 @@ class BatchDeleteRepositoryTest {
     @Test fun entityEmptyCheckProtectsNewlyAddedMediaAfterCandidateCleanup() = runBlocking {
         seedArtists()
         dao.insertAsset(asset("old")); link("c", "old")
+        dao.insertAsset(asset("remaining")); link("c", "remaining")
         deleteMediaCopies(repository, listOf("old"), { true }) { _, _ -> }
         dao.insertAsset(asset("new")); link("c", "new")
         assertFalse(repository.deleteCollectionIfEmpty("c"))
@@ -173,6 +179,131 @@ class BatchDeleteRepositoryTest {
         assertNotNull(dao.getCollection("c"))
         assertNotNull(dao.getArtist("a"))
         assertEquals(1, repository.referenceCount("new"))
+    }
+
+    @Test fun successfulCopiesDeleteOnlyAffectedEmptyCollectionsAcrossArtists() = runBlocking {
+        seedArtists()
+        dao.insertCollection(CollectionEntity("empty", "a", "手工空图集", false, 1, 1))
+        dao.insertCollection(CollectionEntity("untouched", "b", "未涉及", false, 1, 1))
+        dao.insertAsset(asset("shared")); dao.insertAsset(asset("second")); dao.insertAsset(asset("other"))
+        link("c", "shared"); link("c", "second"); link("d", "shared"); link("untouched", "other")
+        assertTrue(repository.setArtistCover("b", "shared"))
+        val result = deleteMediaCopies(repository, listOf("shared", "second"), { true }) { _, _ -> }
+        assertEquals(setOf("shared", "second"), result.deletedIds)
+        assertNull(dao.getCollection("c")); assertNull(dao.getCollection("d"))
+        assertNotNull(dao.getCollection("empty")); assertNotNull(dao.getCollection("untouched"))
+        assertNotNull(dao.getArtist("a")); assertNotNull(dao.getArtist("b"))
+        assertNull(dao.getArtist("b")!!.coverAssetId)
+        assertEquals(1, repository.referenceCount("other"))
+    }
+
+    @Test fun videoGifFailedPendingAndUnavailableReferencesAllKeepCollections() = runBlocking {
+        seedArtists()
+        listOf("gif", "failed", "pending", "staged").forEach {
+            dao.insertCollection(CollectionEntity(it, "a", it, false, 1, 1))
+        }
+        dao.insertAsset(asset("shared"))
+        listOf("c", "gif", "failed", "pending", "staged").forEach { link(it, "shared") }
+        dao.insertAsset(asset("video").copy(mediaType = "VIDEO")); link("c", "video")
+        dao.insertAsset(asset("gif").copy(mediaType = "GIF")); link("gif", "gif")
+        dao.insertAsset(asset("failed")); link("failed", "failed")
+        dao.insertAsset(asset("pending", "PENDING_DELETE")); link("pending", "pending")
+        dao.insertAsset(asset("staged", "STAGED")); link("staged", "staged")
+        val result = deleteMediaCopies(repository, listOf("shared", "failed"), { it != "key-failed" }) { _, _ -> }
+        assertEquals(setOf("shared"), result.deletedIds)
+        assertEquals(setOf("failed"), result.failedIds)
+        listOf("c", "gif", "failed", "pending", "staged", "d").forEach { assertNotNull(dao.getCollection(it)) }
+        listOf("video", "gif", "failed", "pending", "staged").forEach { assertEquals(1, repository.referenceCount(it)) }
+        assertEquals("READY", repository.getAsset("failed")!!.state)
+        assertEquals("PENDING_DELETE", repository.getAsset("pending")!!.state)
+        assertEquals("STAGED", repository.getAsset("staged")!!.state)
+    }
+
+    @Test fun collectionSpanningBatchesIsRemovedOnlyAfterFinalSuccessfulBatch() = runBlocking {
+        seedArtists()
+        val ids = (0..256).map(Int::toString)
+        database.withTransaction { ids.forEach { dao.insertAsset(asset(it)); link("c", it) } }
+        link("d", ids.last())
+        var batches = 0
+        val inspectingRepository = object : MediaLibraryRepository by repository {
+            override suspend fun finishAssetDeletes(deletedIds: List<String>, failedIds: List<String>) {
+                repository.finishAssetDeletes(deletedIds, failedIds)
+                batches++
+                if (batches == 1) {
+                    assertNotNull(dao.getCollection("c")); assertNotNull(dao.getCollection("d"))
+                    assertEquals(2, repository.referenceCount(ids.last()))
+                } else {
+                    assertNull(dao.getCollection("c")); assertNull(dao.getCollection("d"))
+                }
+            }
+        }
+        deleteMediaCopies(inspectingRepository, ids, { true }) { _, _ -> }
+        assertEquals(2, batches)
+        assertNull(dao.getCollection("c")); assertNull(dao.getCollection("d"))
+        assertNotNull(dao.getArtist("a")); assertNotNull(dao.getArtist("b"))
+        assertTrue(dao.allAssets().isEmpty())
+    }
+
+    @Test fun cancellationAfterCommittedBatchRetainsCollectionWithUntouchedPendingCopy() = runBlocking {
+        seedArtists()
+        val ids = (0..256).map(Int::toString)
+        database.withTransaction { ids.forEach { dao.insertAsset(asset(it)); link("c", it) } }
+        var batches = 0
+        try {
+            deleteMediaCopies(repository, ids, {
+                if (it == "key-256") throw CancellationException("stop before final file")
+                true
+            }) { _, _ -> batches++ }
+            fail("expected cancellation")
+        } catch (_: CancellationException) { }
+        assertEquals(2, batches)
+        assertNotNull(dao.getCollection("c"))
+        assertEquals("PENDING_DELETE", repository.getAsset("256")!!.state)
+        assertEquals(1, repository.referenceCount("256"))
+        assertEquals(listOf("256"), dao.allAssets().map { it.id })
+        repository.completeAssetDelete("256")
+        assertNull(dao.getCollection("c"))
+        assertNotNull(dao.getCollection("d"))
+    }
+
+    @Test fun collectionDeleteFailureRollsBackCoversReferencesAndFailureRestore() = runBlocking {
+        seedArtists()
+        dao.insertAsset(asset("shared")); dao.insertAsset(asset("failed"))
+        link("c", "shared"); link("d", "shared"); link("d", "failed")
+        assertTrue(repository.setArtistCover("a", "shared"))
+        assertTrue(repository.setArtistCover("b", "shared"))
+        database.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_empty_cleanup BEFORE DELETE ON WorkCollection BEGIN SELECT RAISE(ABORT, 'cleanup failure'); END")
+        var callbacks = 0
+        try {
+            deleteMediaCopies(repository, listOf("shared", "failed"), { it != "key-failed" }) { _, _ -> callbacks++ }
+            fail("collection cleanup failure must be reported")
+        } catch (_: android.database.sqlite.SQLiteConstraintException) { }
+        assertEquals(0, callbacks)
+        assertNotNull(dao.getCollection("c")); assertNotNull(dao.getCollection("d"))
+        assertEquals(2, repository.referenceCount("shared")); assertEquals(1, repository.referenceCount("failed"))
+        assertEquals("shared", dao.getArtist("a")!!.coverAssetId)
+        assertEquals("shared", dao.getArtist("b")!!.coverAssetId)
+        assertEquals(setOf("shared", "failed"), repository.pendingDeleteAssets().map { it.id }.toSet())
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_empty_cleanup")
+        repository.finishAssetDeletes(listOf("shared"), listOf("failed"))
+        assertNull(dao.getCollection("c")); assertNotNull(dao.getCollection("d"))
+        assertEquals("READY", repository.getAsset("failed")!!.state)
+        assertNull(dao.getArtist("a")!!.coverAssetId); assertNull(dao.getArtist("b")!!.coverAssetId)
+    }
+
+    @Test fun singlePendingRecoveryRemovesGroupsOnlyWhenTheirLastReferenceIsDeleted() = runBlocking {
+        seedArtists()
+        dao.insertCollection(CollectionEntity("empty", "a", "手工空图集", false, 1, 1))
+        dao.insertAsset(asset("first", "PENDING_DELETE")); dao.insertAsset(asset("last", "PENDING_DELETE"))
+        link("c", "first"); link("c", "last"); link("d", "first")
+        repository.completeAssetDelete("first")
+        assertNull(dao.getCollection("d")); assertNotNull(dao.getCollection("c"))
+        assertEquals(1, repository.referenceCount("last"))
+        repository.completeAssetDelete("last")
+        assertNull(dao.getCollection("c"))
+        assertNotNull(dao.getCollection("empty"))
+        assertNotNull(dao.getArtist("a")); assertNotNull(dao.getArtist("b"))
+        assertTrue(repository.pendingDeleteAssets().isEmpty())
     }
 
     private suspend fun seedArtists() {

@@ -15,6 +15,7 @@ data class ArtistWithCollections(
     val collections: List<CollectionEntity>,
     val imageCount: Int,
     val coverStorageKey: String?,
+    val videoCount: Int = 0,
 )
 
 data class CollectionWithMediaCounts(
@@ -74,6 +75,10 @@ interface GalleryDao {
                 JOIN CollectionMedia cm ON cm.collectionId = wc.id
                 JOIN MediaAsset ma ON ma.id = cm.assetId
                 WHERE wc.artistId = Artist.id AND ma.mediaType IN ('IMAGE', 'GIF') AND ma.state = 'READY') AS imageCount,
+            (SELECT COUNT(DISTINCT cm.assetId) FROM WorkCollection wc
+                JOIN CollectionMedia cm ON cm.collectionId = wc.id
+                JOIN MediaAsset ma ON ma.id = cm.assetId
+                WHERE wc.artistId = Artist.id AND ma.mediaType = 'VIDEO' AND ma.state = 'READY') AS videoCount,
             COALESCE((SELECT ma.storageKey FROM WorkCollection wc
                 JOIN CollectionMedia cm ON cm.collectionId = wc.id
                 JOIN MediaAsset ma ON ma.id = cm.assetId
@@ -95,6 +100,10 @@ interface GalleryDao {
                 JOIN CollectionMedia cm ON cm.collectionId = wc.id
                 JOIN MediaAsset ma ON ma.id = cm.assetId
                 WHERE wc.artistId = Artist.id AND ma.mediaType IN ('IMAGE', 'GIF') AND ma.state = 'READY') AS imageCount,
+            (SELECT COUNT(DISTINCT cm.assetId) FROM WorkCollection wc
+                JOIN CollectionMedia cm ON cm.collectionId = wc.id
+                JOIN MediaAsset ma ON ma.id = cm.assetId
+                WHERE wc.artistId = Artist.id AND ma.mediaType = 'VIDEO' AND ma.state = 'READY') AS videoCount,
             COALESCE((SELECT ma.storageKey FROM WorkCollection wc
                 JOIN CollectionMedia cm ON cm.collectionId = wc.id
                 JOIN MediaAsset ma ON ma.id = cm.assetId
@@ -177,6 +186,15 @@ interface GalleryDao {
     @Query("DELETE FROM WorkCollection WHERE id = :collectionId")
     suspend fun deleteCollection(collectionId: String): Int
 
+    @Query("""
+        DELETE FROM WorkCollection WHERE id IN (
+            SELECT collectionId FROM CollectionMedia WHERE assetId IN (:assetIds)
+        ) AND NOT EXISTS (
+            SELECT 1 FROM CollectionMedia WHERE collectionId = WorkCollection.id AND assetId NOT IN (:assetIds)
+        )
+    """)
+    suspend fun deleteCollectionsEmptiedByAssets(assetIds: List<String>)
+
     @Insert
     suspend fun insertCollection(collection: CollectionEntity)
 
@@ -218,7 +236,7 @@ interface GalleryDao {
         SELECT ma.*, MIN(cm.manualOrder) AS manualOrder, MIN(cm.sourceName) AS sourceName
         FROM WorkCollection wc JOIN CollectionMedia cm ON cm.collectionId = wc.id
         JOIN MediaAsset ma ON ma.id = cm.assetId
-        WHERE wc.artistId = :artistId AND ma.mediaType IN ('IMAGE', 'GIF') AND ma.state = 'READY'
+        WHERE wc.artistId = :artistId AND ma.mediaType IN ('IMAGE', 'GIF', 'VIDEO') AND ma.state = 'READY'
         GROUP BY ma.id ORDER BY ma.createdAt ASC, ma.id ASC
     """)
     fun observeArtistImages(artistId: String): Flow<List<MediaAssetRow>>
