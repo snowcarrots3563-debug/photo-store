@@ -17,7 +17,7 @@
 - `E:\ChatGPT\photo store\ui-demos\参考截图\方案D-2026-09-20\截图清单.json`。
 - `E:\ChatGPT\photo store\ui-demos\参考截图\方案D-2026-09-20\截图校验.json`。
 - 当前目录、父目录及工程内实际适用的AGENTS.md；不能假定阶段0之后未新增。
-- 主代理技能 `C:\Users\fdcx\.codex\skills\subagent-orchestration\SKILL.md`；UI代理技能 `C:\Users\fdcx\.agents\skills\frontend-design\SKILL.md`。
+- 主代理技能 `%USERPROFILE%\.codex\skills\subagent-orchestration\SKILL.md`；UI代理技能 `%USERPROFILE%\.agents\skills\frontend-design\SKILL.md`。
 
 D高于技能默认审美，不重新设计；中文高于技能历史英文委派惯例。使用当前工具真实参数，不照搬旧agent_type/fork_context/档位映射；子代理不指定模型覆盖，继承配置，只记录工具实际可见信息。
 

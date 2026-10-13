@@ -6,7 +6,7 @@
 
 本轮仅修改 D HTML、本说明相关段落、开发进度和开发文档中的必要实现状态。旧 A/B/C、index.html、旧说明及素材均不修改。D 的视觉方向已获用户确认，正式安卓开发未开始。
 
-主代理使用 `C:\Users\fdcx\.codex\skills\subagent-orchestration\SKILL.md`；设计与实施使用 `C:\Users\fdcx\.agents\skills\frontend-design\SKILL.md`。用户给出的 skill 路径缺少分隔点，以上为实际读取路径。参考图实际位于 `D:\QQ\聊天记录\Tencent Files\22736987\nt_qq\nt_data\Pic\2026-09\Ori\`，主代理和设计代理均已实际查看四张同名原图。
+主代理使用 `%USERPROFILE%\.codex\skills\subagent-orchestration\SKILL.md`；设计与实施使用 `%USERPROFILE%\.agents\skills\frontend-design\SKILL.md`。用户给出的 skill 路径缺少分隔点，以上为实际读取路径。参考图实际位于 `用户本地提供的参考图目录`，主代理和设计代理均已实际查看四张同名原图。
 
 初版代理顺序为设计（只读）、主代理冻结、实施（仅新 HTML）、审查（只读）、原实施代理修复。三个代理均不指定模型覆盖，继承当时主代理配置；使用实际可用的 `collaboration.spawn_agent` 参数。此次主页增量由主代理直接实施和验收，使用已读取的 frontend-design skill，未增派子代理。所有沟通和界面文案使用中文。
 

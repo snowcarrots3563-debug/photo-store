@@ -11,6 +11,7 @@ Android 本地图库应用，按画师和作品集整理图片、GIF、视频及
 - `design/`：应用图标设计素材。
 - [开发文档](./开发文档.md)、[开发进度](./开发进度.md)、[正式开发分阶段计划](./正式开发分阶段计划.md)：需求、进度及验收边界。
 - [更新日志](./更新日志.md)：应用版本记录。
+- [CHANGELOG](./CHANGELOG.md)：GitHub版本发布的完整分类日志，与应用更新说明同步。
 
 ## 本地构建
 
@@ -39,6 +40,8 @@ GitHub 仓库：[snowcarrots3563-debug/photo-store](https://github.com/snowcarro
 构建缓存、APK、签名文件、凭据、本机 SDK 配置和 `android/verification/` 历史验证目录仅保留在本机。开发文档指向该目录的历史证据链接需要在原工作区查看；它们不会随克隆下载。测试源码使用的压缩包样本保留在 `android/app/src/androidTest/assets/`。
 
 仓库公开可见，后续提交前请检查 `git diff --cached`，不要加入私人媒体、数据库、云服务凭据或签名密钥。云端备份尚未接入。
+
+完整开发版本按[AGENTS.md](./AGENTS.md)自动执行测试、日志更新、提交及分支／唯一版本标签推送；普通小修改不单独发版。已有`v0.1.9`标签保留，禁止覆盖标签或force push。APK及本机验证资料继续留在本机，推送标签不自动上传APK。
 
 ## 第三方依赖
 

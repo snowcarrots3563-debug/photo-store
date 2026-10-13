@@ -26,6 +26,21 @@ keystore.properties
 credentials.json
 service-account*.json
 
+# Private databases, model weights, and local agent configuration
+*.db
+*.sqlite
+*.sqlite3
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.tflite
+/.codex/
+/.agents/
+/.aws/
+
 # Local verification archives and agent working notes
 /android/verification/
 /.planning/
