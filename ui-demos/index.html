@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>私人画师图库 · UI 方案选型</title>
+  <style>
+    :root{color-scheme:light;background:#f3f0e8;color:#202326;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 10% 0,#fffdf7 0 20%,transparent 45%),#f3f0e8}a{color:inherit;text-decoration:none}.shell{max-width:1180px;margin:auto;padding:clamp(24px,5vw,72px) clamp(18px,4vw,48px)}
+    .eyebrow{font:12px ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:#2e5bff}.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:48px;align-items:end;margin-bottom:48px}.hero h1{font:clamp(42px,7vw,86px)/.96 Georgia,"Songti SC",serif;letter-spacing:-.06em;margin:16px 0}.hero p{max-width:560px;color:#5b6265;font-size:17px;line-height:1.75}.stamp{justify-self:end;max-width:310px;border:1px solid #c7c9c4;background:#fbfaf5;padding:22px;box-shadow:10px 12px 0 #dce7ff;transform:rotate(2deg)}.stamp strong{display:block;font-size:22px;margin-bottom:8px}.stamp small{color:#646a6b;line-height:1.6}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.card{position:relative;display:flex;flex-direction:column;min-height:360px;background:#fffdf7;border:1px solid #c7c9c4;padding:22px;overflow:hidden;transition:transform .2s,box-shadow .2s}.card:hover,.card:focus-within{transform:translateY(-5px);box-shadow:0 14px 30px #20232618}.card.a{background:#f9f2e7}.card.b{background:#0b0d12;color:#f4f0e8;border-color:#37304a}.card.c{background:#ecebe4}.swatch{display:flex;gap:6px;margin:20px 0 18px}.swatch i{width:34px;height:8px;display:block}.card h2{font:32px Georgia,"Songti SC",serif;margin:0 0 8px}.card p{color:#646a6b;line-height:1.55}.card.b p{color:#b9bdc6}.card .arrow{margin-top:auto;display:flex;justify-content:space-between;align-items:center;padding-top:24px;font-weight:700}.tag{font:11px ui-monospace,monospace;letter-spacing:.08em;color:#6c7071}.card.b .tag{color:#76e4d5}.card.a .swatch i:nth-child(1){background:#243b53}.card.a .swatch i:nth-child(2){background:#e97865}.card.a .swatch i:nth-child(3){background:#a8c7b5}.card.b .swatch i:nth-child(1){background:#76e4d5}.card.b .swatch i:nth-child(2){background:#ff8066}.card.b .swatch i:nth-child(3){background:#37304a}.card.c .swatch i:nth-child(1){background:#2e5bff}.card.c .swatch i:nth-child(2){background:#f06b4f}.card.c .swatch i:nth-child(3){background:#dce7ff}.note{margin-top:42px;border-top:1px solid #c7c9c4;padding-top:20px;color:#646a6b;font-size:13px;line-height:1.7;display:flex;justify-content:space-between;gap:20px}.note a{text-decoration:underline;text-underline-offset:4px;color:#202326}@media(max-width:760px){.hero{grid-template-columns:1fr;gap:20px}.stamp{justify-self:start}.grid{grid-template-columns:1fr}.card{min-height:260px}.note{display:block}.note span{display:block;margin-top:12px}}
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="eyebrow">PRIVATE ARTIST LIBRARY / UI SELECTION</div>
+    <section class="hero">
+      <div><h1>给你的收藏，<br>选一套观看方式。</h1><p>三个方向共用同一套示例数据与功能边界：画师、作品集、共享引用、卡牌欣赏、漫画阅读，以及导入/备份流程演示。请分别打开体验，再选择下一步的界面语言。</p></div>
+      <aside class="stamp"><strong>3 个可交互 Demo</strong><small>这是 UI 原型，不是安卓应用。压缩包、文件保存、导出、备份均为流程模拟；不会读取或上传私人文件。</small></aside>
+    </section>
+    <section class="grid" aria-label="设计方案">
+      <a class="card a" href="./方案A.html"><span class="tag">A / 画册台</span><div class="swatch"><i></i><i></i><i></i></div><h2>轻盈画册</h2><p>像翻开一册私人画师集：错落拼贴、纸张页签和明亮的浏览节奏，先让作品被看见。</p><div class="arrow"><span>进入方案 A</span><span aria-hidden="true">↗</span></div></a>
+      <a class="card b" href="./方案B.html"><span class="tag">B / 暗室灯箱</span><div class="swatch"><i></i><i></i><i></i></div><h2>沉浸收藏</h2><p>把一张作品置于暗室中央，拖动卡牌让光晕、镭射与厚边随着手势移动。</p><div class="arrow"><span>进入方案 B</span><span aria-hidden="true">↗</span></div></a>
+      <a class="card c" href="./方案C.html"><span class="tag">C / 索引台</span><div class="swatch"><i></i><i></i><i></i></div><h2>清晰目录</h2><p>像一份可检索的私人档案：引用数、媒体类型和批量操作都在第一层，适合整理与查找。</p><div class="arrow"><span>进入方案 C</span><span aria-hidden="true">↗</span></div></a>
+    </section>
+    <footer class="note"><span>建议体验：先搜索“墨岚” → 进入“春日速写” → 试卡牌拖动 → 切漫画正/倒序 → 从工具入口走一遍导入与删除引用。</span><a href="./设计与验证说明.md">查看设计与验证说明</a></footer>
+  </main>
+</body>
+</html>

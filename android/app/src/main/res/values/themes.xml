@@ -1,0 +1,20 @@
+<resources>
+    <style name="Theme.ArtistGallery" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#F6F6F7</item>
+        <item name="android:colorAccent">#3265D5</item>
+        <item name="android:dialogTheme">@style/Theme.ArtistGallery.Dialog</item>
+    </style>
+    <style name="Theme.ArtistGallery.Dialog" parent="android:style/Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowElevation">0dp</item>
+    </style>
+</resources>

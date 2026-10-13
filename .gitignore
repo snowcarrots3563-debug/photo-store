@@ -1,0 +1,39 @@
+# Local build tools, caches, and generated output
+.gradle/
+.gradle-user-home/
+.android-user-home/
+.kotlin/
+.tmp/
+**/build/
+local.properties
+.idea/
+.vscode/
+*.iml
+*.apk
+*.aab
+
+# Credentials and signing material
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+key.properties
+keystore.properties
+credentials.json
+service-account*.json
+
+# Local verification archives and agent working notes
+/android/verification/
+/.planning/
+/task_plan.md
+/findings.md
+/progress.md
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
