@@ -49,6 +49,8 @@ class GalleryViewModel(
     private var homeLoadState = LoadState.Loading
     private var detailJob: Job? = null
     private var mediaJob: Job? = null
+    private var galleryQueriesPaused = false
+    private var resumeArtistsAfterPause = false
     private var importJob: Job? = null
     private var importResultJob: Job? = null
     private var pendingImportResultId: String? = null
@@ -267,14 +269,33 @@ class GalleryViewModel(
     private fun entityDeleteDialog(kind: EntitySelectionKind, ids: List<String>): GalleryDialog =
         if (kind == EntitySelectionKind.Artists) GalleryDialog.DeleteArtists(ids) else GalleryDialog.DeleteCollections(ids)
 
+    internal fun setGalleryQueriesPaused(paused: Boolean) {
+        if (galleryQueriesPaused == paused) return
+        galleryQueriesPaused = paused
+        if (paused) {
+            resumeArtistsAfterPause = artistsJob?.isActive == true
+            artistsJob?.cancel()
+            detailJob?.cancel()
+            mediaJob?.cancel()
+        } else {
+            val resumeArtists = resumeArtistsAfterPause
+            resumeArtistsAfterPause = false
+            if (resumeArtists) observeArtists()
+            observeRoute()
+        }
+    }
+
     private fun observeArtists() {
+        if (galleryQueriesPaused) { resumeArtistsAfterPause = true; return }
         artistsJob?.cancel()
         artistsJob = viewModelScope.launch {
             repository.observeArtists().distinctUntilChanged().catch { e ->
                 if (e is CancellationException) throw e
+                currentCoroutineContext().ensureActive()
                 homeLoadState = LoadState.Failed
                 if (state.value.route == GalleryRoute.Home) change { it.copy(loadState = LoadState.Failed) }
             }.collect { artists ->
+                currentCoroutineContext().ensureActive()
                 homeLoadState = LoadState.Ready
                 change { current -> current.copy(artists = orderedEntities(artists, persistedBrowseOptions.artistOrder) { it.id },
                     selectedEntityIds = if (current.entitySelectionKind == EntitySelectionKind.Artists)
@@ -287,6 +308,7 @@ class GalleryViewModel(
     private fun observeRoute() {
         detailJob?.cancel()
         mediaJob?.cancel()
+        if (galleryQueriesPaused) return
         val route = state.value.route
         observeMediaRoute(route)
         if (route == GalleryRoute.Home) {
@@ -309,7 +331,7 @@ class GalleryViewModel(
                             loadState = if (detail == null) LoadState.Failed else LoadState.Ready) }
                     }
                     is GalleryRoute.Collection -> {
-                        var loadedCollection = false
+                        var loadedCollection = state.value.collection?.id == route.id && state.value.artistDetail?.artist?.id == route.artistId
                         combine(repository.observeArtist(route.artistId), repository.observeCollection(route.id)) { artist, collection -> artist to collection }
                             .collect { (artist, collection) ->
                                 currentCoroutineContext().ensureActive()
@@ -335,6 +357,7 @@ class GalleryViewModel(
     }
 
     private fun observeMediaRoute(route: GalleryRoute) {
+        if (galleryQueriesPaused) return
         val source = when {
             mediaRepository == null -> null
             route is GalleryRoute.Collection -> mediaRepository.observeCollectionMedia(route.id)

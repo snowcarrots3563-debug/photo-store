@@ -164,6 +164,23 @@ class BackupRestorerTest {
         }
     }
 
+    @Test fun sameLengthStagingTamperingFailsConfirmationAndKeepsOldGalleryAndSource() = runBlocking {
+        fixture { f ->
+            val old = f.installOld()
+            val source = f.backup()
+            val prepared = f.restorer.prepare(Uri.fromFile(source), {})
+            val target = f.files.stagingFile(prepared.stagedAssets.values.first().stagingKey)
+            val bytes = target.readBytes()
+            target.writeBytes(bytes.copyOf().apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() })
+            assertEquals(bytes.size.toLong(), target.length())
+            rejects { f.restorer.confirm(prepared) }
+            assertEquals(listOf(old), f.database.galleryDao().allAssets())
+            assertEquals(old.sha256, f.files.inspectOriginal(old.storageKey).sha256)
+            assertTrue(source.exists()); assertTrue(f.journalFiles().isEmpty()); assertTrue(f.stagingFiles().isEmpty())
+            prepared.stagedAssets.values.forEach { assertFalse(f.files.hasOriginal(it.storageKey)) }
+        }
+    }
+
     @Test fun startupRecoveryDiscardsPreparedAndPromotedUncommittedFiles() = runBlocking {
         fixture { f ->
             val old = f.installOld()

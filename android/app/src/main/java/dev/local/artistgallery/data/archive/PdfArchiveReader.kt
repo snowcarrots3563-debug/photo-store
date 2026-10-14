@@ -104,6 +104,12 @@ class PdfArchiveReader(
         virtualPages.clear()
     }
 
+    fun isOrdinaryZipEntry(index: Int): Boolean {
+        if (delegate !is ZipArchiveReader) return false
+        entries()
+        return index !in virtualPages
+    }
+
     override fun extract(index: Int, output: OutputStream, checkCancelled: () -> Unit): Long {
         entries()
         val page = virtualPages[index] ?: return delegate.extract(index, output, checkCancelled)

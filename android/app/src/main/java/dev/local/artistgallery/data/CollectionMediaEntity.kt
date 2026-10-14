@@ -21,7 +21,7 @@ import androidx.room.Index
             onDelete = ForeignKey.RESTRICT,
         ),
     ],
-    indices = [Index("collectionId"), Index("assetId")],
+    indices = [Index("collectionId"), Index("assetId"), Index(value = ["collectionId", "manualOrder", "assetId"])],
 )
 data class CollectionMediaEntity(
     val collectionId: String,

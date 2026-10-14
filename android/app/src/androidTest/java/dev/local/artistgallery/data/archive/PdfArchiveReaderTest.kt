@@ -10,6 +10,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.OutputStream
 import java.util.UUID
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.CancellationException
 import org.junit.After
 import org.junit.Assert.*
@@ -46,6 +48,29 @@ class PdfArchiveReaderTest {
             assertFalse(cache.exists())
         }
         assertTrue(archive.closed)
+    }
+
+    @Test fun streamingHashEligibilityIncludesOnlyOriginalZipEntries() {
+        val file = File(folder, "ordinary.zip")
+        ZipOutputStream(file.outputStream()).use { zip ->
+            listOf("ordinary.png" to ByteArray(6000), "book.pdf" to pdf(listOf(100 to 100))).forEach { (name, bytes) ->
+                zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry()
+            }
+        }
+        PdfArchiveReader(ZipArchiveReader(file, listOf(file), Long.MAX_VALUE), File(folder, "zip-cache"), { Long.MAX_VALUE }, {}).use { reader ->
+            assertTrue(reader.isOrdinaryZipEntry(0))
+            val pages = reader.entries().filter { it.path.endsWith("页.png") }
+            assertEquals(1, pages.size)
+            assertFalse(reader.isOrdinaryZipEntry(pages.single().index))
+            assertTrue(reader.isOrdinaryZipEntry(0))
+        }
+        val archive = FakeReader(listOf(source(0, "ordinary.png", ByteArray(6000)), source(1, "book.pdf", pdf(listOf(100 to 100)))))
+        val cache = File(folder, "non-zip-cache")
+        PdfArchiveReader(archive, cache, { Long.MAX_VALUE }, {}).use { reader ->
+            assertFalse(reader.isOrdinaryZipEntry(0))
+            assertFalse(reader.isOrdinaryZipEntry(1))
+            assertTrue(archive.extracted.isEmpty()); assertFalse(cache.exists())
+        }
     }
 
     @Test fun everyPagePreservesOrderWhiteBackgroundGeometryAndIndependentIdentity() {

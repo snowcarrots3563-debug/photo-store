@@ -248,6 +248,11 @@ fun GalleryApp(
         } }, onExport = localTransfer?.let { it::openExport })
         archiveImporter?.let { coordinator ->
             val archiveState by coordinator.state.collectAsStateWithLifecycle()
+            val blocked = archiveState.visible && archiveState.format == "ZIP" && archiveState.step == ArchiveStep.Importing
+            DisposableEffect(vm, blocked) {
+                vm.setGalleryQueriesPaused(blocked)
+                onDispose { vm.setGalleryQueriesPaused(false) }
+            }
             ArchiveImportDialog(archiveState, state.artists, coordinator,
                 pick = { add -> if (archiveState.format == "FOLDER") folderPicker.launch(null) else { supplement = add; archivePicker.launch(arrayOf("*/*")) } },
                 addArtist = { coordinator.hide(); vm.onEvent(GalleryEvent.OpenDialog(GalleryDialog.AddArtist(fromArchiveImport = true))) },

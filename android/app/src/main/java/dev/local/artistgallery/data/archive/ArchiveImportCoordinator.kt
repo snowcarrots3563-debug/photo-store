@@ -3,6 +3,7 @@ package dev.local.artistgallery.data.archive
 import android.content.Context
 import android.net.Uri
 import android.os.StatFs
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.room.withTransaction
 import dev.local.artistgallery.data.*
@@ -179,7 +180,7 @@ class ArchiveImportCoordinator(
         update { it.copy(step = ArchiveStep.Password, message = null) }
     }
 
-    private suspend fun openReader(): ArchiveReader {
+    private suspend fun openReader(): PdfArchiveReader {
         val folder = directory(requireNotNull(sessionId))
         val jobContext = currentCoroutineContext()
         // Committed batches keep their original skipped PDFs; only new selections add page items.
@@ -315,7 +316,7 @@ class ArchiveImportCoordinator(
                     val entry = entriesBySourceUri[item.sourceUri] ?: throw IOException("压缩条目不存在。")
                     if (entry.byteSize > files.availableBytes()) throw ArchiveReadException(ArchiveError.LIMIT, "可用空间不足，请释放空间后重试。")
                     val coroutine = currentCoroutineContext()
-                    importer.importArchiveItem(item) { output ->
+                    importer.importArchiveItem(item, hashWhileWriting = { item.status == "QUEUED" && reader.isOrdinaryZipEntry(entry.index) }) { output ->
                         reader.extract(entry.index, output) { coroutine.ensureActive() }
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
@@ -518,6 +519,10 @@ class ArchiveImportCoordinator(
     private suspend fun copyVolume(uri: Uri, target: File) {
         val part = File(target.parentFile, target.name + ".copying")
         var count = 0L
+        var cachedAvailable = -1L
+        var lastSpaceCount = 0L
+        var lastProgressTime = SystemClock.elapsedRealtime()
+        if (!cancelling) update { it.copy(progress = "${target.name} · 0 MB") }
         try {
             val expected = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -527,16 +532,28 @@ class ArchiveImportCoordinator(
                         currentCoroutineContext().ensureActive()
                         val length = input.read(buffer)
                         if (length < 0) break
-                        if (StatFs(root.absolutePath).availableBytes < length + 16L * 1024 * 1024) throw ArchiveReadException(ArchiveError.LIMIT, "可用空间不足，无法暂存分卷。")
+                        if (cachedAvailable < 0 || count - lastSpaceCount >= 8L * 1024 * 1024 || cachedAvailable < length + 16L * 1024 * 1024) {
+                            cachedAvailable = StatFs(root.absolutePath).availableBytes
+                            lastSpaceCount = count
+                        }
+                        if (cachedAvailable < length + 16L * 1024 * 1024) throw ArchiveReadException(ArchiveError.LIMIT, "可用空间不足，无法暂存分卷。")
                         output.write(buffer, 0, length)
                         count += length
-                        update { it.copy(progress = "${target.name} · ${count / (1024 * 1024)} MB") }
+                        cachedAvailable -= length
+                        val now = SystemClock.elapsedRealtime()
+                        if (!cancelling && now - lastProgressTime >= 200) {
+                            update { it.copy(progress = "${target.name} · ${count / (1024 * 1024)} MB") }
+                            lastProgressTime = now
+                        }
                     }
                     output.fd.sync()
                 }
             } ?: throw IOException("来源文件不可用。")
             if (expected >= 0 && expected != count) throw ArchiveReadException(ArchiveError.IO, "所选分卷复制不完整，请重新选择。")
             if (!part.renameTo(target)) throw IOException("无法保存所选分卷。")
-        } finally { part.delete() }
+        } finally {
+            part.delete()
+            if (!cancelling) update { it.copy(progress = "${target.name} · ${count / (1024 * 1024)} MB") }
+        }
     }
 }

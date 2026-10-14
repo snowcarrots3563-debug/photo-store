@@ -27,18 +27,35 @@ class MediaFileStore(context: Context) {
 
     fun availableBytes(): Long = StatFs(requireRoot().absolutePath).availableBytes
 
-    suspend fun writeToStaging(stagingKey: String, writer: (OutputStream) -> Unit): StagedFile = withContext(Dispatchers.IO) {
+    suspend fun writeToStaging(stagingKey: String, hashWhileWriting: Boolean = false, writer: (OutputStream) -> Unit): StagedFile = withContext(Dispatchers.IO) {
         val target = stagingFile(stagingKey)
         if (!stagingDirectory().exists() && !stagingDirectory().mkdirs()) throw IOException("无法创建导入暂存目录")
+        val digest = if (hashWhileWriting) MessageDigest.getInstance("SHA-256") else null
+        var written = 0L
         try {
             FileOutputStream(target).use { output ->
                 BufferedOutputStream(output, BUFFER_SIZE).use { buffered ->
-                    writer(buffered)
+                    val writerOutput = if (digest == null) buffered else object : OutputStream() {
+                        override fun write(value: Int) {
+                            buffered.write(value)
+                            digest.update(value.toByte())
+                            written++
+                        }
+                        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                            buffered.write(bytes, offset, length)
+                            digest.update(bytes, offset, length)
+                            written += length
+                        }
+                        override fun flush() = buffered.flush()
+                        override fun close() = buffered.close()
+                    }
+                    writer(writerOutput)
                     buffered.flush()
                     output.fd.sync()
                 }
             }
-            inspectStaging(stagingKey)
+            if (digest == null) inspectStaging(stagingKey)
+            else StagedFile(written, digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) })
         } catch (error: Throwable) {
             target.delete()
             throw error

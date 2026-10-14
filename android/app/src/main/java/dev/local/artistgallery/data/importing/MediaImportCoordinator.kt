@@ -35,7 +35,7 @@ class MediaImportCoordinator(
     private val resolver: ContentResolver = context.contentResolver
     private val commitMutex = Mutex()
 
-    suspend fun importArchiveItem(initial: ImportItemEntity, writer: (OutputStream) -> Unit) = withContext(Dispatchers.IO) {
+    suspend fun importArchiveItem(initial: ImportItemEntity, hashWhileWriting: () -> Boolean = { false }, writer: (OutputStream) -> Unit) = withContext(Dispatchers.IO) {
         when (initial.status) {
             "STAGED" -> finishStaged(initial)
             "FINALIZED" -> withContext(NonCancellable) { finishFinalized(initial) }
@@ -46,7 +46,7 @@ class MediaImportCoordinator(
                 }
                 val copying = initial.copy(status = "COPYING", errorMessage = null, updatedAt = System.currentTimeMillis())
                 repository.updateImportItem(copying)
-                val staged = files.writeToStaging(copying.stagingKey, writer)
+                val staged = files.writeToStaging(copying.stagingKey, hashWhileWriting = hashWhileWriting(), writer = writer)
                 if (skipSmallFile(copying, staged.byteSize)) return@withContext
                 try { files.validateStagedMedia(copying.stagingKey, copying.mediaType) }
                 catch (error: IOException) { throw dev.local.artistgallery.data.archive.ArchiveReadException(dev.local.artistgallery.data.archive.ArchiveError.CORRUPT, "媒体文件无法识别或已经损坏。", error) }
@@ -222,7 +222,7 @@ class MediaImportCoordinator(
             finishFinalized(finalized)
             return
         }
-        // A fresh archive write was already synced and inspected; retries must inspect disk again.
+        // Only this just-completed, synced write can reuse its hash result; retries inspect disk again.
         val staged = verifiedStaged ?: files.inspectStaging(item.stagingKey)
         if (staged.sha256 != item.sha256 || staged.byteSize != item.byteSize) throw IOException("暂存文件核验失败。")
         if (skipSmallFile(item, staged.byteSize)) return

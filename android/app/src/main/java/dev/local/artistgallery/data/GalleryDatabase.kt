@@ -9,13 +9,18 @@ import dev.local.artistgallery.data.archive.ArchiveGroupEntity
 
 @Database(
     entities = [ArtistEntity::class, CollectionEntity::class, MediaAssetEntity::class, CollectionMediaEntity::class, ImportBatchEntity::class, ImportItemEntity::class, ArchiveTaskEntity::class, ArchiveGroupEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class GalleryDatabase : RoomDatabase() {
     abstract fun galleryDao(): GalleryDao
 
     companion object {
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_CollectionMedia_collectionId_manualOrder_assetId ON CollectionMedia (collectionId, manualOrder, assetId)")
+            }
+        }
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE Artist ADD COLUMN coverAssetId TEXT")

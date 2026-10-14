@@ -4,6 +4,9 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.EncryptionMethod
@@ -118,6 +121,30 @@ class ZipArchiveReaderTest {
                     override fun write(value: Int) { throw java.io.IOException("synthetic write failure") }
                 }) {}
             }
+        }
+    }
+
+    @Test fun sameLengthStoredEntryDamageFailsCrcVerification() {
+        val bytes = ByteArray(6 * 1024) { (it % 251).toByte() }
+        val name = "neutral.bin"
+        val file = File(folder.root, "damaged.zip")
+        ZipOutputStream(file.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry(name).apply {
+                method = ZipEntry.STORED
+                size = bytes.size.toLong()
+                compressedSize = size
+                crc = CRC32().also { it.update(bytes) }.value
+            })
+            zip.write(bytes)
+            zip.closeEntry()
+        }
+        val archive = file.readBytes()
+        val changed = 30 + name.toByteArray(Charsets.UTF_8).size + bytes.size / 2
+        archive[changed] = (archive[changed].toInt() xor 1).toByte()
+        file.writeBytes(archive)
+        ZipArchiveReader(file, listOf(file), bytes.size.toLong()).use { reader ->
+            assertEquals(bytes.size.toLong(), reader.entries().single().byteSize)
+            expect(ArchiveError.CORRUPT) { reader.extract(0, ByteArrayOutputStream()) {} }
         }
     }
 
