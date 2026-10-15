@@ -25,6 +25,10 @@ class ImportNotifications(private val context: Context) : Application.ActivityLi
     init {
         try {
             manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "导入结果", NotificationManager.IMPORTANCE_DEFAULT))
+            manager.createNotificationChannel(NotificationChannel(PROGRESS_CHANNEL_ID, "导入进度", NotificationManager.IMPORTANCE_LOW).apply {
+                setSound(null, null)
+                enableVibration(false)
+            })
         } catch (_: RuntimeException) { }
     }
 
@@ -56,6 +60,32 @@ class ImportNotifications(private val context: Context) : Application.ActivityLi
         }
     }
 
+    fun progress(work: ImportWorkProgress, activeCount: Int = 1): Notification {
+        val pending = PendingIntent.getActivity(context, 0, createProgressIntent(context, work), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val counts = work.total?.takeIf { it > 0 }?.let { "${work.processed} / $it" }
+        val message = listOfNotNull(work.detail.takeIf { it.isNotBlank() }, counts).joinToString(" · ")
+        return Notification.Builder(context, PROGRESS_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_import_complete)
+            .setContentTitle(if (activeCount > 1) "${work.title}（共 $activeCount 项任务）" else work.title)
+            .setContentText(message)
+            .setStyle(Notification.BigTextStyle().bigText(message))
+            .setContentIntent(pending)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
+            .setProgress(work.barMaximum, work.barValue, work.isIndeterminate)
+            .apply { if (Build.VERSION.SDK_INT >= 31) setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE) }
+            .build()
+    }
+
+    fun updateProgress(notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+            if (!manager.areNotificationsEnabled()) return
+            manager.notify(FOREGROUND_ID, notification)
+        } catch (_: RuntimeException) { }
+    }
+
     override fun onActivityStarted(activity: Activity) { visibility.started() }
     override fun onActivityStopped(activity: Activity) { visibility.stopped(activity.isChangingConfigurations) }
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
@@ -66,6 +96,8 @@ class ImportNotifications(private val context: Context) : Application.ActivityLi
 
     companion object {
         internal const val CHANNEL_ID = "import-results"
+        internal const val PROGRESS_CHANNEL_ID = "import-progress"
+        internal const val FOREGROUND_ID = 203
         private const val ACTION_RESULT = "dev.local.artistgallery.OPEN_IMPORT_RESULT"
         private const val RESULT_SCHEME = "artistgallery"
 
@@ -73,6 +105,11 @@ class ImportNotifications(private val context: Context) : Application.ActivityLi
             Intent(context, MainActivity::class.java).apply {
                 action = ACTION_RESULT
                 data = Uri.Builder().scheme(RESULT_SCHEME).authority("import-result").appendPath(target.kind.name).appendPath(target.batchId).build()
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+
+        internal fun createProgressIntent(context: Context, work: ImportWorkProgress): Intent =
+            work.target?.let { createTargetIntent(context, it) } ?: Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
 

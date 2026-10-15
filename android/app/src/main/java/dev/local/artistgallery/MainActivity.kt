@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             var showUpdates by remember(versionCode) { mutableStateOf(showUpdateNotes) }
             GalleryApp(app.repository, mediaRepository = app.mediaRepository, mediaImporter = app.mediaImportCoordinator, previewDecoder = app.previewDecoder, assetReader = app.assetReader, archiveImporter = app.archiveImporter, browsePreferences = app.browsePreferences, localTransfer = app.localTransfer,
-                importNotifications = app.importNotifications, importResultTarget = importResultTarget,
+                importNotifications = app.importNotifications, importResultTarget = importResultTarget, mediaImportSession = app.mediaImportSession,
                 onImportResultConsumed = { importResultTarget = null; intent?.data = null })
             if (showUpdates && !notificationLaunch) {
                 DTheme {

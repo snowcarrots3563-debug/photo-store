@@ -101,19 +101,25 @@ class MediaImportCoordinator(
             )
         }
         try {
-            repository.insertImport(ImportBatchEntity(batchId, targetCollectionId, "COPYING", now, now), items)
-        } catch (error: Exception) {
-            items.forEach(::releasePermission)
-            throw error
-        }
-        try {
+            try {
+                repository.insertImport(ImportBatchEntity(batchId, targetCollectionId, "COPYING", now, now), items)
+            } catch (error: Exception) {
+                if (error !is CancellationException) items.forEach(::releasePermission)
+                throw error
+            }
+            onProgress(ImportProgress(batchId, 1, items.size, items.first().sourceName, 0))
             items.forEachIndexed { index, item ->
+                var copiedBytes = 0L
                 if (item.status == ImportItemStatus.QUEUED.name) {
-                    processItem(item) { bytes -> onProgress(ImportProgress(batchId, index + 1, items.size, item.sourceName, bytes)) }
-                } else onProgress(ImportProgress(batchId, index + 1, items.size, item.sourceName, 0))
+                    processItem(item) { bytes ->
+                        copiedBytes = bytes
+                        onProgress(ImportProgress(batchId, index + 1, items.size, item.sourceName, bytes, completedItems = index))
+                    }
+                }
+                onProgress(ImportProgress(batchId, index + 1, items.size, item.sourceName, copiedBytes, completedItems = index + 1))
             }
         } catch (cancelled: CancellationException) {
-            repository.updateImportBatch(batchId, "INTERRUPTED")
+            interruptBatch(batchId)
             throw cancelled
         }
         updateBatchStatus(batchId)
@@ -121,39 +127,55 @@ class MediaImportCoordinator(
     }
 
     suspend fun retryFailed(batchId: String, onProgress: (ImportProgress) -> Unit): ImportBatchSummary = withContext(Dispatchers.IO) {
-        val failed = repository.importItems(batchId).filter {
+        val allItems = repository.importItems(batchId)
+        if (allItems.isEmpty()) throw IllegalArgumentException("导入批次不存在")
+        val failed = allItems.filter {
             it.status in RETRYABLE_STATUSES && (it.hasPersistedPermission || (it.sha256 != null && it.byteSize != null))
         }
-        val allItems = repository.importItems(batchId)
-        failed.forEachIndexed { index, old ->
-            try {
-                when {
-                    old.status == ImportItemStatus.STAGED.name -> finishStaged(old)
-                    old.status == ImportItemStatus.FINALIZED.name -> finishFinalized(old)
-                    old.status == ImportItemStatus.FAILED.name && files.hasOriginal(old.storageKey) && old.sha256 != null && old.byteSize != null ->
-                        finishFinalized(old.copy(status = ImportItemStatus.FINALIZED.name))
-                    !old.hasPersistedPermission -> {
-                        repository.updateImportItem(old.copy(errorMessage = "来源授权已失效，请重新选择该文件后导入。", updatedAt = System.currentTimeMillis()))
-                        onProgress(ImportProgress(batchId, index + 1, failed.size, old.sourceName, 0))
+        try {
+            onProgress(ImportProgress(batchId, if (failed.isEmpty()) 0 else 1, failed.size, failed.firstOrNull()?.sourceName ?: "正在准备重试…", 0))
+            failed.forEachIndexed { index, old ->
+                var copiedBytes = 0L
+                try {
+                    when {
+                        old.status == ImportItemStatus.STAGED.name -> finishStaged(old)
+                        old.status == ImportItemStatus.FINALIZED.name -> finishFinalized(old)
+                        old.status == ImportItemStatus.FAILED.name && files.hasOriginal(old.storageKey) && old.sha256 != null && old.byteSize != null ->
+                            finishFinalized(old.copy(status = ImportItemStatus.FINALIZED.name))
+                        !old.hasPersistedPermission -> repository.updateImportItem(old.copy(errorMessage = "来源授权已失效，请重新选择该文件后导入。", updatedAt = System.currentTimeMillis()))
+                        else -> {
+                            val item = old.copy(status = ImportItemStatus.QUEUED.name, errorMessage = null, updatedAt = System.currentTimeMillis())
+                            repository.updateImportItem(item)
+                            processItem(item) { bytes ->
+                                copiedBytes = bytes
+                                onProgress(ImportProgress(batchId, index + 1, failed.size, item.sourceName, bytes, completedItems = index))
+                            }
+                        }
                     }
-                    else -> {
-                        val item = old.copy(status = ImportItemStatus.QUEUED.name, errorMessage = null, updatedAt = System.currentTimeMillis())
-                        repository.updateImportItem(item)
-                        processItem(item) { bytes -> onProgress(ImportProgress(batchId, index + 1, failed.size, item.sourceName, bytes)) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    val latest = repository.importItems(batchId).firstOrNull { it.id == old.id } ?: old
+                    if (latest.status !in SUCCESS_STATUSES && latest.status != ImportItemStatus.SKIPPED.name) {
+                        repository.updateImportItem(latest.copy(status = ImportItemStatus.FAILED.name, errorMessage = error.message ?: "重试失败。", updatedAt = System.currentTimeMillis()))
                     }
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                val latest = repository.importItems(batchId).firstOrNull { it.id == old.id } ?: old
-                if (latest.status !in SUCCESS_STATUSES && latest.status != ImportItemStatus.SKIPPED.name) {
-                    repository.updateImportItem(latest.copy(status = ImportItemStatus.FAILED.name, errorMessage = error.message ?: "重试失败。", updatedAt = System.currentTimeMillis()))
-                }
+                onProgress(ImportProgress(batchId, index + 1, failed.size, old.sourceName, copiedBytes, completedItems = index + 1))
             }
+        } catch (cancelled: CancellationException) {
+            interruptBatch(batchId)
+            throw cancelled
         }
-        if (allItems.isEmpty()) throw IllegalArgumentException("导入批次不存在")
         updateBatchStatus(batchId)
         summary(batchId)
+    }
+
+    private suspend fun interruptBatch(batchId: String) = withContext(NonCancellable) {
+        repository.importItems(batchId).filter { it.status in setOf("QUEUED", "COPYING") }.forEach { item ->
+            files.deleteStaging(item.stagingKey)
+            repository.updateImportItem(item.copy(status = "FAILED", errorMessage = "导入曾被中断，可重试；若来源授权已失效，请重新选择文件。", updatedAt = System.currentTimeMillis()))
+        }
+        repository.updateImportBatch(batchId, "INTERRUPTED")
     }
 
     suspend fun recoverPending() = withContext(Dispatchers.IO) {

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
@@ -10,6 +13,8 @@
         android:theme="@style/Theme.ArtistGallery" android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="true">
+        <service android:name=".data.importing.ImportForegroundService"
+            android:exported="false" android:foregroundServiceType="dataSync" android:stopWithTask="false" />
         <provider android:name=".data.preview.AssetFileProvider"
             android:authorities="${applicationId}.assetfiles" android:exported="false"
             android:grantUriPermissions="true">

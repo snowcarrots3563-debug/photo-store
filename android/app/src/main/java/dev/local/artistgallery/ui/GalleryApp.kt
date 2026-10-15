@@ -34,6 +34,7 @@ import androidx.core.content.ContextCompat
 import dev.local.artistgallery.data.GalleryRepository
 import dev.local.artistgallery.data.MediaLibraryRepository
 import dev.local.artistgallery.data.importing.MediaImportCoordinator
+import dev.local.artistgallery.data.importing.MediaImportSession
 import dev.local.artistgallery.data.importing.ImportNotifications
 import dev.local.artistgallery.data.importing.ImportResultKind
 import dev.local.artistgallery.data.importing.ImportResultTarget
@@ -73,14 +74,18 @@ fun GalleryApp(
     importNotifications: ImportNotifications? = null,
     importResultTarget: ImportResultTarget? = null,
     onImportResultConsumed: () -> Unit = {},
+    mediaImportSession: MediaImportSession? = null,
 ) {
-    val factory = remember(repository, mediaRepository, mediaImporter, browsePreferences, importNotifications) {
+    val factory = remember(repository, mediaRepository, mediaImporter, browsePreferences, importNotifications, mediaImportSession) {
         viewModelFactory { initializer { GalleryViewModel(repository, createSavedStateHandle(), mediaRepository, mediaImporter, browsePreferences,
-            onImportCompleted = { completion -> importNotifications?.completed(completion) }) } }
+            onImportCompleted = { completion -> importNotifications?.completed(completion) }, mediaImportSession = mediaImportSession) } }
     }
     val vm: GalleryViewModel = viewModel(factory = factory)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var supplement by rememberSaveable { mutableStateOf(false) }
+    val archivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> archiveImporter?.pick(uris, supplement) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) archiveImporter?.pickFolder(uri) }
     var pendingNotificationAction by rememberSaveable { mutableStateOf<List<String>?>(null) }
     fun performImportAction(action: NotificationImportAction, key: String) {
         when (action) {
@@ -91,6 +96,9 @@ fun GalleryApp(
                     NotificationImportAction.ArchiveConfirm -> coordinator.confirm()
                     NotificationImportAction.ArchiveRetry -> coordinator.retry()
                     NotificationImportAction.ArchiveResume -> coordinator.resume(key)
+                    NotificationImportAction.ArchivePick -> { supplement = false; archivePicker.launch(arrayOf("*/*")) }
+                    NotificationImportAction.ArchiveSupplementPick -> { supplement = true; archivePicker.launch(arrayOf("*/*")) }
+                    NotificationImportAction.FolderPick -> folderPicker.launch(null)
                     else -> Unit
                 }
             }
@@ -159,9 +167,6 @@ fun GalleryApp(
         }
         onImportResultConsumed()
     }
-    var supplement by remember { mutableStateOf(false) }
-    val archivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> archiveImporter?.pick(uris, supplement) }
-    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) archiveImporter?.pickFolder(uri) }
     var toast by remember { mutableStateOf<String?>(null) }
     var scrollToArtist by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(vm) {
@@ -254,7 +259,12 @@ fun GalleryApp(
                 onDispose { vm.setGalleryQueriesPaused(false) }
             }
             ArchiveImportDialog(archiveState, state.artists, coordinator,
-                pick = { add -> if (archiveState.format == "FOLDER") folderPicker.launch(null) else { supplement = add; archivePicker.launch(arrayOf("*/*")) } },
+                pick = { add ->
+                    val current = coordinator.state.value
+                    val action = if (current.format == "FOLDER") NotificationImportAction.FolderPick
+                        else if (add) NotificationImportAction.ArchiveSupplementPick else NotificationImportAction.ArchivePick
+                    requestImportAction(action, archiveSourceActionKey(current))
+                },
                 addArtist = { coordinator.hide(); vm.onEvent(GalleryEvent.OpenDialog(GalleryDialog.AddArtist(fromArchiveImport = true))) },
                 viewGallery = { id -> vm.onEvent(GalleryEvent.OpenArtist(id)); vm.onEvent(GalleryEvent.SwitchArtistTab(ArtistTab.Collections)) },
                 confirm = { coordinator.state.value.taskId?.let { requestImportAction(NotificationImportAction.ArchiveConfirm, it) } },
@@ -306,12 +316,19 @@ fun GalleryApp(
     }
 }
 
-internal enum class NotificationImportAction { MediaConfirm, MediaRetry, ArchiveConfirm, ArchiveRetry, ArchiveResume }
+internal enum class NotificationImportAction { MediaConfirm, MediaRetry, ArchiveConfirm, ArchiveRetry, ArchiveResume, ArchivePick, ArchiveSupplementPick, FolderPick }
+
+internal fun archiveSourceActionKey(state: ArchiveImportState): String =
+    "${state.artistId.orEmpty()}|${state.format}|${state.step.name}|${state.taskId.orEmpty()}"
 
 internal fun isArchiveNotificationActionCurrent(action: NotificationImportAction, key: String, state: ArchiveImportState): Boolean =
     state.visible && when (action) {
         NotificationImportAction.ArchiveConfirm -> state.step == ArchiveStep.Preview && state.taskId == key && state.groups.any { it.canImport }
         NotificationImportAction.ArchiveRetry -> state.step in setOf(ArchiveStep.Result, ArchiveStep.Error) && state.taskId == key
         NotificationImportAction.ArchiveResume -> state.step == ArchiveStep.History && state.history.any { it.id == key }
+        NotificationImportAction.ArchivePick, NotificationImportAction.FolderPick, NotificationImportAction.ArchiveSupplementPick ->
+            state.artistId != null && archiveSourceActionKey(state) == key &&
+                if (action == NotificationImportAction.ArchiveSupplementPick) state.step == ArchiveStep.Error && state.files.isNotEmpty() && state.format != "FOLDER"
+                else state.step in setOf(ArchiveStep.Source, ArchiveStep.Target, ArchiveStep.Error) && (state.format == "FOLDER") == (action == NotificationImportAction.FolderPick)
         else -> false
     }

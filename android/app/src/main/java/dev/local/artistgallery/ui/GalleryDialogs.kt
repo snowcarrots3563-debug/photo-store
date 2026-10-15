@@ -391,7 +391,7 @@ private fun ImportPreviewContent(state: GalleryUiState, onEvent: (GalleryEvent) 
 @Composable
 private fun ImportProgressContent(state: GalleryUiState) {
     val progress = state.importProgress
-    DialogHint("关闭此窗口或离开页面不会取消导入。遇到进程中断时，会在下次打开应用后恢复未完成项。")
+    DialogHint("关闭此窗口或离开页面不会取消导入。已完成项会保留；中断项可能需要继续、重试或重新选择来源。")
     DGroup(Modifier.padding(top = 8.dp)) {
         Text(progress?.sourceName ?: "正在准备媒体…", fontSize = 15.sp, modifier = Modifier.padding(16.dp))
         Text(if (progress == null) "正在读取文件信息…" else "第 ${progress.currentItem} / ${progress.itemCount} 项 · ${formatBytes(progress.copiedBytes)}",

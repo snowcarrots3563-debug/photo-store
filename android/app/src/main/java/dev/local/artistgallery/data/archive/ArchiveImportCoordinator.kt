@@ -1,16 +1,22 @@
 package dev.local.artistgallery.data.archive
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.StatFs
 import android.os.SystemClock
 import android.provider.OpenableColumns
+import androidx.core.net.toUri
 import androidx.room.withTransaction
 import dev.local.artistgallery.data.*
 import dev.local.artistgallery.data.importing.MediaFileStore
 import dev.local.artistgallery.data.importing.MediaImportCoordinator
 import dev.local.artistgallery.data.importing.ImportCompletion
 import dev.local.artistgallery.data.importing.ImportResultKind
+import dev.local.artistgallery.data.importing.ImportResultTarget
+import dev.local.artistgallery.data.importing.ImportWorkController
+import dev.local.artistgallery.data.importing.ImportWorkProgress
+import dev.local.artistgallery.data.importing.ImportWorkInterruptedException
 import dev.local.artistgallery.model.SaveResult
 import java.io.File
 import java.io.FileOutputStream
@@ -46,6 +52,7 @@ class ArchiveImportCoordinator(
     private val importer: MediaImportCoordinator,
     private val files: MediaFileStore,
     private val scope: CoroutineScope,
+    private val foregroundController: ImportWorkController? = null,
     private val onImportCompleted: (ImportCompletion) -> Unit = {},
 ) {
     private val dao = database.galleryDao()
@@ -53,6 +60,7 @@ class ArchiveImportCoordinator(
     val state = mutableState.asStateFlow()
     private val jobLock = Any()
     @Volatile private var job: Job? = null
+    @Volatile private var activeWork: ImportWorkController.Handle? = null
     private var pendingResultId: String? = null
     private var sessionId: String? = null
     private var password: CharArray? = null
@@ -62,6 +70,11 @@ class ArchiveImportCoordinator(
     private var continueImport = false
     @Volatile private var cancelling = false
     private val recovered = CompletableDeferred<Unit>()
+    private val sourceReadPermissions = SourceReadPermissions(
+        { context.contentResolver.persistedUriPermissions.filter { it.isReadPermission }.map { it.uri.toString() }.toSet() },
+        { context.contentResolver.takePersistableUriPermission(it.toUri(), Intent.FLAG_GRANT_READ_URI_PERMISSION) },
+        { context.contentResolver.releasePersistableUriPermission(it.toUri(), Intent.FLAG_GRANT_READ_URI_PERMISSION) },
+    )
     private val root: File get() = File(context.getExternalFilesDir(null) ?: throw IOException("应用存储暂不可用。"), ".archive-imports")
     private fun directory(id: String): File {
         val name = UUID.fromString(id).toString()
@@ -69,7 +82,12 @@ class ArchiveImportCoordinator(
         if (folder.parentFile != root.canonicalFile || folder.name != name) throw ArchiveReadException(ArchiveError.UNSAFE_PATH, "压缩暂存目录不安全。")
         return folder
     }
-    private fun update(block: (ArchiveImportState) -> ArchiveImportState) { mutableState.update(block) }
+    private fun update(block: (ArchiveImportState) -> ArchiveImportState) {
+        mutableState.update(block)
+        if (state.value.step == ArchiveStep.Preparing) activeWork?.update(ImportWorkProgress(workTitle(), state.value.progress.ifBlank { "正在准备…" }, target = resultTarget()))
+    }
+    private fun workTitle() = if (state.value.format == "FOLDER") "正在导入文件夹" else "正在导入压缩包"
+    private fun resultTarget() = sessionId?.takeIf { taskCommitted }?.let { ImportResultTarget(ImportResultKind.Archive, it) }
     private val busy get() = job != null || cancelling
 
     fun open(artistId: String?) {
@@ -87,7 +105,7 @@ class ArchiveImportCoordinator(
     fun target() { update { it.copy(step = ArchiveStep.Target) } }
     fun showCurrent() { update { it.copy(visible = true) } }
     val hasSelection: Boolean get() = sessionId != null && mainName != null
-    fun previewSelection() { if (!busy) run { prepare() } }
+    fun previewSelection() { if (!busy) run(protected = true) { prepare() } }
     fun back() {
         if (busy) { hide(); return }
         update { it.copy(step = if (taskCommitted) ArchiveStep.Result else when (it.step) {
@@ -106,7 +124,8 @@ class ArchiveImportCoordinator(
 
     fun pick(uris: List<Uri>, supplement: Boolean) {
         if (uris.isEmpty() || busy || state.value.artistId == null) return
-        run {
+        val sourceReads = sourceReadPermissions.acquire(uris.map(Uri::toString))
+        run(protected = true, sourceReads = sourceReads) {
             update { it.copy(step = ArchiveStep.Preparing, message = null, reason = null) }
             if (!supplement) {
                 releaseSession()
@@ -126,6 +145,7 @@ class ArchiveImportCoordinator(
                 names.add(name)
                 update { it.copy(files = names.toList(), progress = "已准备 ${names.size} 个文件") }
             }
+            sourceReads.close()
             mainName = ArchiveBundle.mainName(state.value.format, names)
             // Zip4j locates .z01/.z02 by the main file stem; normalize only our private copies.
             if (state.value.format == "ZIP" && !requireNotNull(mainName).endsWith(".001", true)) {
@@ -149,7 +169,8 @@ class ArchiveImportCoordinator(
 
     fun pickFolder(uri: Uri) {
         if (busy || state.value.artistId == null) return
-        run {
+        val sourceReads = sourceReadPermissions.acquire(listOf(uri.toString()))
+        run(protected = true, sourceReads = sourceReads) {
             releaseSession()
             sessionId = UUID.randomUUID().toString()
             update { it.copy(step = ArchiveStep.Preparing, format = "FOLDER", taskId = sessionId, files = emptyList(), items = emptyList(), groups = emptyList(), message = null, reason = null) }
@@ -162,6 +183,7 @@ class ArchiveImportCoordinator(
                     update { it.copy(progress = progress) }
                 }
             }
+            sourceReads.close()
             update { it.copy(files = listOf(requireNotNull(mainName))) }
             prepare()
         }
@@ -172,7 +194,7 @@ class ArchiveImportCoordinator(
         password?.fill('\u0000')
         password = value.copyOf()
         value.fill('\u0000')
-        run { prepare() }
+        run(protected = true) { prepare() }
     }
 
     fun requestPassword() {
@@ -249,7 +271,7 @@ class ArchiveImportCoordinator(
 
     fun confirm() {
         if (busy || state.value.groups.none { it.canImport }) return
-        run {
+        run(protected = true) {
             if (!taskCommitted) {
                 val id = requireNotNull(sessionId)
                 val now = System.currentTimeMillis()
@@ -326,10 +348,16 @@ class ArchiveImportCoordinator(
         val entriesBySourceUri = readerEntries.associateBy { "archive://$id/${it.index}" }
         openReader().use { reader ->
             val items = repository.importItems(id)
+            var completed = items.count { it.status in setOf("COMPLETE", "REUSED", "SKIPPED", "CANCELLED") }
+            fun progress(detail: String) {
+                activeWork?.update(ImportWorkProgress(workTitle(), detail, completed.toLong(), items.size.toLong(), resultTarget()))
+            }
+            progress("正在准备导入…")
             for ((position, item) in items.withIndex()) {
                 currentCoroutineContext().ensureActive()
                 if (item.status in setOf("COMPLETE", "REUSED", "SKIPPED", "CANCELLED")) continue
                 update { it.copy(progress = "${position + 1} / ${items.size} · ${item.sourceRelativePath}") }
+                progress(item.sourceRelativePath ?: item.sourceName)
                 try {
                     val entry = entriesBySourceUri[item.sourceUri] ?: throw IOException("压缩条目不存在。")
                     if (entry.byteSize > files.availableBytes()) throw ArchiveReadException(ArchiveError.LIMIT, "可用空间不足，请释放空间后重试。")
@@ -349,6 +377,8 @@ class ArchiveImportCoordinator(
                         throw error
                     }
                 }
+                completed++
+                progress(item.sourceRelativePath ?: item.sourceName)
             }
         }
         refreshResult(id)
@@ -359,7 +389,7 @@ class ArchiveImportCoordinator(
 
     fun retry() {
         if (busy) return
-        run { continueImport = true; prepare() }
+        run(protected = true) { continueImport = taskCommitted; prepare() }
     }
 
     suspend fun hasUnfinishedItems(batchId: String): Boolean {
@@ -400,7 +430,7 @@ class ArchiveImportCoordinator(
 
     fun resume(id: String) {
         if (busy) return
-        run {
+        run(protected = true) {
             releaseSession()
             val task = dao.archiveTasks().first { it.id == id }
             sessionId = id; mainName = task.mainName; taskCommitted = true
@@ -417,12 +447,19 @@ class ArchiveImportCoordinator(
         if (cancelling) return
         cancelling = true
         update { it.copy(progress = "正在取消；已开始提交的媒体会先完成保存…") }
+        var protectionFailure: String? = null
+        val cleanupWork = try { foregroundController?.begin(ImportWorkProgress(workTitle(), "正在取消并保存记录…", target = resultTarget())) }
+        catch (error: RuntimeException) { protectionFailure = error.message; null }
         val active = job
         active?.cancel()
-        scope.launch {
+        val attached = CompletableDeferred<Unit>()
+        val cleanup = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                active?.join()
                 withContext(NonCancellable) {
+                    attached.await()
+                    try { cleanupWork?.awaitForeground() }
+                    catch (error: Exception) { protectionFailure = error.message ?: "后台保护已中断。" }
+                    active?.join()
                     val id = sessionId
                     if (id != null && taskCommitted) {
                         repository.importItems(id).filter { it.status in setOf("STAGED", "FINALIZED") || it.status == "FAILED" && it.sha256 != null && files.hasOriginal(it.storageKey) }.forEach { item ->
@@ -437,7 +474,7 @@ class ArchiveImportCoordinator(
                         }
                         refreshResult(id)
                         if (repository.importItems(id).none { it.status in setOf("STAGED", "FINALIZED") }) cleanupVolumes()
-                        update { it.copy(step = ArchiveStep.Result, message = "导入已取消，已经成功的媒体保留。") }
+                        update { it.copy(step = ArchiveStep.Result, message = "导入已取消，已经成功的媒体保留。" + protectionFailure?.let { failure -> " $failure" }.orEmpty()) }
                     } else {
                         releaseSession()
                         update { ArchiveImportState() }
@@ -446,11 +483,14 @@ class ArchiveImportCoordinator(
             } catch (_: Exception) {
                 update { it.copy(step = ArchiveStep.Error, message = "取消后的记录保存失败；已经核验的文件保留，重新打开应用后恢复。") }
             } finally {
+                cleanupWork?.close()
                 password?.fill('\u0000'); password = null
                 continueImport = false; cancelling = false
                 drainPendingResult()
             }
         }
+        cleanupWork?.attach(cleanup)
+        attached.complete(Unit)
     }
 
     fun done() {
@@ -475,6 +515,8 @@ class ArchiveImportCoordinator(
             update { it.copy(step = ArchiveStep.Error, message = "导入记录恢复失败，请重新打开应用后重试。") }
         }
     }
+
+    suspend fun awaitRecovery() { recovered.await() }
 
     private suspend fun refreshResult(id: String) {
         val items = repository.importItems(id)
@@ -511,24 +553,64 @@ class ArchiveImportCoordinator(
         }
     }
 
-    private fun run(block: suspend () -> Unit) {
+    private fun run(protected: Boolean = false, sourceReads: AutoCloseable? = null, block: suspend () -> Unit) {
         val scheduled = synchronized(jobLock) {
-            if (busy) return
-            scope.launch(start = CoroutineStart.LAZY) {
-                try { recovered.await(); block() }
-                catch (cancelled: CancellationException) { throw cancelled }
+            if (busy) { sourceReads?.close(); return }
+            val handle = try { if (protected) foregroundController?.begin(ImportWorkProgress(workTitle(), "正在准备…", target = resultTarget())) else null }
+            catch (error: RuntimeException) {
+                sourceReads?.close()
+                update { it.copy(step = ArchiveStep.Error, message = error.message ?: "无法启动后台导入，请返回应用后重试。", reason = null) }
+                return
+            }
+            activeWork = handle
+            var entered = false
+            try { scope.launch(start = CoroutineStart.LAZY) {
+                entered = true
+                try { handle?.awaitForeground(); awaitRecovery(); block() }
+                catch (cancelled: CancellationException) {
+                    if (!cancelling) {
+                        try {
+                            withContext(NonCancellable) { if (taskCommitted) sessionId?.let { repository.updateImportBatch(it, "INTERRUPTED") } }
+                        } finally { update { it.copy(step = ArchiveStep.Error, message = interruptionMessage(cancelled), reason = null) } }
+                    }
+                    throw cancelled
+                }
                 catch (error: Exception) {
                     val reason = (error as? ArchiveReadException)?.reason
                     if (reason == ArchiveError.PASSWORD) { password?.fill('\u0000'); password = null }
                     update { it.copy(step = if (reason == ArchiveError.PASSWORD) ArchiveStep.Password else ArchiveStep.Error, message = friendly(error), reason = reason) }
                 } finally {
-                    synchronized(jobLock) { job = null }
+                    sourceReads?.close()
+                    handle?.close()
+                }
+            }.also { scheduled ->
+                job = scheduled
+                handle?.attach(scheduled)
+                scheduled.invokeOnCompletion { cause ->
+                    sourceReads?.close()
+                    handle?.close()
+                    synchronized(jobLock) {
+                        if (job === scheduled) { job = null; activeWork = null }
+                    }
+                    if (!entered && cause != null && !cancelling) update { it.copy(step = ArchiveStep.Error, message = interruptionMessage(cause), reason = null) }
                     drainPendingResult()
                 }
-            }.also { job = it }
+            } } catch (error: RuntimeException) {
+                sourceReads?.close(); handle?.close(); activeWork = null
+                update { it.copy(step = ArchiveStep.Error, message = "无法开始导入，请返回应用后重试。", reason = null) }
+                return
+            }
         }
-        scheduled.start()
+        try { scheduled.start() }
+        catch (error: RuntimeException) {
+            sourceReads?.close(); scheduled.cancel()
+            update { it.copy(step = ArchiveStep.Error, message = "无法开始导入，请返回应用后重试。", reason = null) }
+        }
     }
+
+    private fun interruptionMessage(error: Throwable): String =
+        if (error is ImportWorkInterruptedException) error.message ?: "后台导入已中断，请继续或重试。"
+        else "导入已中断，已保存的媒体保留；请继续或重试。"
 
     private fun friendly(error: Exception): String = if (error is ArchiveReadException) error.message ?: "压缩读取失败。"
         else if (state.value.format == "FOLDER") "无法读取或保存文件夹任务，请检查目录授权、文件变化和可用空间后重试。"

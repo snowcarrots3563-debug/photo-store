@@ -28,6 +28,7 @@ class UpdateNotesDialogTest {
     @Test fun showsBothProvidedVersionsAndChangesThenAcknowledges() {
         show(updates)
         compose.onNodeWithText("更新内容", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("当前版本：0.25（版本代码 25） · 2026-10-12", useUnmergedTree = true).assertIsDisplayed()
         updates.forEach { update ->
             compose.onNodeWithText("${update.versionName} · ${update.date}", useUnmergedTree = true).assertIsDisplayed()
             update.changes.forEach { compose.onNodeWithText("• $it", useUnmergedTree = true).assertIsDisplayed() }

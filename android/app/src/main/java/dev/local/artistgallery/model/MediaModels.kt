@@ -21,6 +21,7 @@ data class ImportProgress(
     val itemCount: Int,
     val sourceName: String,
     val copiedBytes: Long,
+    val completedItems: Int = 0,
 )
 
 data class NewMediaAsset(

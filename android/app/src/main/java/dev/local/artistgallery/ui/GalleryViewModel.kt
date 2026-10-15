@@ -12,8 +12,9 @@ import dev.local.artistgallery.data.orderedEntities
 import dev.local.artistgallery.data.reorderVisibleIds
 import dev.local.artistgallery.data.deleting.deleteMediaCopies
 import dev.local.artistgallery.data.importing.MediaImportCoordinator
+import dev.local.artistgallery.data.importing.MediaImportSession
+import dev.local.artistgallery.data.importing.MediaImportSessionState
 import dev.local.artistgallery.data.importing.ImportCompletion
-import dev.local.artistgallery.data.importing.toImportCompletion
 import dev.local.artistgallery.model.AddReferenceResult
 import dev.local.artistgallery.model.ArtistDetail
 import dev.local.artistgallery.model.MediaAssetSummary
@@ -37,6 +38,7 @@ class GalleryViewModel(
     private val mediaImporter: MediaImportCoordinator? = null,
     private val browsePreferences: dev.local.artistgallery.data.BrowsePreferences? = null,
     private val onImportCompleted: (ImportCompletion) -> Unit = {},
+    mediaImportSession: MediaImportSession? = null,
 ) : ViewModel() {
     private var persistedBrowseOptions = browsePreferences?.options?.value ?: BrowseOptions()
     private val mutableState = MutableStateFlow(restore().let { it.copy(browseOptions = displayOptions(it.route)) })
@@ -51,7 +53,12 @@ class GalleryViewModel(
     private var mediaJob: Job? = null
     private var galleryQueriesPaused = false
     private var resumeArtistsAfterPause = false
-    private var importJob: Job? = null
+    private val importSession = mediaImportSession ?: mediaImporter?.let { importer ->
+        MediaImportSession(viewModelScope, repository,
+            { uris, target, progress -> importer.importUris(uris.map(Uri::parse), target, progress) }, importer::retryFailed,
+            onImportCompleted = onImportCompleted)
+    }
+    private var observedImportAttempt: Long? = null
     private var importPreviewJob: Job? = null
     private var importResultJob: Job? = null
     private var pendingImportResultId: String? = null
@@ -65,6 +72,7 @@ class GalleryViewModel(
         observeArtists()
         observeRoute()
         observeImportHistory()
+        observeMediaImport()
         (state.value.dialog as? GalleryDialog.ArtistCover)?.let { loadCoverImages(it.artistId) }
         ((state.value.dialog as? GalleryDialog.ImportTarget)?.artistId
             ?: state.value.pendingImportDefaultArtistId?.takeIf { state.value.dialog == GalleryDialog.ImportPreview })?.let { loadTargetCollections(it) }
@@ -434,8 +442,8 @@ class GalleryViewModel(
             mediaItems = parent?.images ?: emptyList(), selectedMediaIds = emptySet(), mediaSelectionMode = false,
             entitySelectionKind = null, selectedEntityIds = emptySet(), browseOptions = displayOptions(route),
             pendingAddAssetIds = emptyList(), importCandidates = emptyList(), importResult = null,
-            pendingImportTargetCollectionId = if (importJob?.isActive == true) it.pendingImportTargetCollectionId else null,
-            pendingImportDefaultArtistId = if (importJob?.isActive == true) it.pendingImportDefaultArtistId else null) }
+            pendingImportTargetCollectionId = if (importSession?.isRunning == true) it.pendingImportTargetCollectionId else null,
+            pendingImportDefaultArtistId = if (importSession?.isRunning == true) it.pendingImportDefaultArtistId else null) }
         observeRoute()
     }
 
@@ -499,7 +507,7 @@ class GalleryViewModel(
                 GalleryDialog.CollectionMediaSort -> canSortCollectionMedia(state.value)
                 else -> true
             }) {
-                val newImportTarget = (event.dialog is GalleryDialog.ImportTarget || event.dialog == GalleryDialog.AddMenu) && importJob?.isActive != true
+                val newImportTarget = (event.dialog is GalleryDialog.ImportTarget || event.dialog == GalleryDialog.AddMenu) && importSession?.isRunning != true
                 if (newImportTarget) {
                     importPreviewJob?.cancel()
                     importPreviewId = null
@@ -518,6 +526,8 @@ class GalleryViewModel(
             }) }
             GalleryEvent.Submit -> submit()
             GalleryEvent.DismissDialog -> {
+                if (state.value.dialog == GalleryDialog.ImportProgress && importSession?.isRunning == true)
+                    savedState["hiddenImportAttempt"] = importSession.state.value.attempt
                 val resumeArchive = (state.value.dialog as? GalleryDialog.AddArtist)?.fromArchiveImport == true
                 coverJob?.cancel()
                 val cancelImport = state.value.dialog is GalleryDialog.ImportTarget || state.value.dialog == GalleryDialog.ImportPreview
@@ -689,7 +699,7 @@ class GalleryViewModel(
     }
 
     private fun openImportTarget(artistId: String?, collectionId: String?, toUnassigned: Boolean, fromFiles: Boolean = false) {
-        if (importJob?.isActive == true) {
+        if (importSession?.isRunning == true) {
             messages.tryEmit(GalleryFeedback.Saved("图库导入仍在后台进行。"))
             return
         }
@@ -729,7 +739,7 @@ class GalleryViewModel(
 
     private fun openImportResult(batchId: String) {
         val media = mediaRepository ?: return
-        if (importJob?.isActive == true) {
+        if (importSession?.isRunning == true) {
             pendingImportResultId = batchId
             messages.tryEmit(GalleryFeedback.Saved("当前导入结束后查看结果。"))
             return
@@ -747,7 +757,7 @@ class GalleryViewModel(
     }
 
     internal fun importPermissionActionKey(event: GalleryEvent): String? {
-        if (importJob?.isActive == true || state.value.isSaving) return null
+        if (importSession?.isRunning == true || state.value.isSaving) return null
         val current = state.value
         return when (event) {
             GalleryEvent.ConfirmImport -> importPreviewId?.takeIf { current.dialog == GalleryDialog.ImportPreview && current.importCandidates.isNotEmpty() }
@@ -763,8 +773,45 @@ class GalleryViewModel(
     }
 
     private fun finishImportAttempt() {
-        importJob = null
         pendingImportResultId?.let { id -> pendingImportResultId = null; openImportResult(id) }
+    }
+
+    private fun observeMediaImport() {
+        val session = importSession ?: return
+        viewModelScope.launch {
+            session.state.collect { work ->
+                if (work.attempt == 0L) return@collect
+                val newlyAttached = observedImportAttempt != work.attempt
+                observedImportAttempt = work.attempt
+                val hidden = savedState.get<Long>("hiddenImportAttempt") == work.attempt
+                if (work.running) {
+                    if (newlyAttached && !hidden) change { it.copy(dialog = GalleryDialog.ImportProgress, importProgress = work.progress, fieldError = null) }
+                    else changeTransient { it.copy(importProgress = work.progress) }
+                } else {
+                    if (work.result == null && work.error == null) changeTransient { it.copy(importProgress = null,
+                        dialog = if (it.dialog == GalleryDialog.ImportProgress) GalleryDialog.None else it.dialog) }
+                    consumeMediaImportOutcome(work, newlyAttached && !hidden)
+                    finishImportAttempt()
+                }
+            }
+        }
+    }
+
+    private fun consumeMediaImportOutcome(work: MediaImportSessionState, showIfUnattached: Boolean = false) {
+        if (importSession?.acknowledge(work.attempt) != true) return
+        val current = state.value
+        val preserveDraft = current.dialog is GalleryDialog.ImportTarget || current.dialog == GalleryDialog.ImportPreview
+        val result = work.result
+        val showResult = result != null && (current.dialog == GalleryDialog.ImportProgress || showIfUnattached && current.dialog == GalleryDialog.None)
+        val message = result?.let(::importSummaryText) ?: work.error ?: "导入失败，请重试。"
+        change { it.copy(dialog = if (showResult) GalleryDialog.ImportResult(requireNotNull(result).id) else if (result == null && !preserveDraft) GalleryDialog.None else it.dialog,
+            importResult = result ?: it.importResult, importProgress = null,
+            importCandidates = if (preserveDraft) it.importCandidates else emptyList(),
+            pendingImportTargetCollectionId = if (preserveDraft) it.pendingImportTargetCollectionId else null,
+            pendingImportDefaultArtistId = if (preserveDraft) it.pendingImportDefaultArtistId else null,
+            fieldError = if (result == null && !preserveDraft) message else it.fieldError) }
+        if (!showResult) messages.tryEmit(GalleryFeedback.Saved(message))
+        if (result != null) observeRoute()
     }
 
     private fun observeImportHistory() {
@@ -838,58 +885,28 @@ class GalleryViewModel(
     }
 
     private fun startImport() {
-        if (importJob?.isActive == true) return
-        val importer = mediaImporter ?: return
+        val session = importSession ?: return
+        if (session.isRunning) return
         val candidates = state.value.importCandidates
         if (candidates.isEmpty()) return
         val targetCollectionId = state.value.pendingImportTargetCollectionId
         val defaultArtistId = state.value.pendingImportDefaultArtistId
+        consumeMediaImportOutcome(session.state.value)
+        savedState.remove<Long>("hiddenImportAttempt")
         importPreviewId = null
         importResultJob?.cancel()
         change { it.copy(dialog = GalleryDialog.ImportProgress, importProgress = null, importResult = null) }
-        importJob = viewModelScope.launch {
-            try {
-                val actualTargetId = if (defaultArtistId == null) targetCollectionId else when (val result = repository.ensureDefaultCollection(defaultArtistId)) {
-                    is SaveResult.Saved -> result.id
-                    SaveResult.NotFound -> throw IllegalStateException("画师不存在，请重新选择导入位置。")
-                    else -> throw IllegalStateException("无法准备默认图集，请稍后重试。")
-                }
-                currentCoroutineContext().ensureActive()
-                val result = importer.importUris(candidates.map { Uri.parse(it.uri) }, actualTargetId) { progress ->
-                    changeTransient { it.copy(importProgress = progress) }
-                }
-                notifyImportCompleted(result)
-                val showResult = state.value.dialog == GalleryDialog.ImportProgress
-                change { it.copy(dialog = if (showResult) GalleryDialog.ImportResult(result.id) else GalleryDialog.None, importResult = result, importProgress = null, importCandidates = emptyList(), pendingImportTargetCollectionId = null, pendingImportDefaultArtistId = null) }
-                if (!showResult) messages.emit(GalleryFeedback.Saved(importSummaryText(result)))
-                observeRoute()
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) {
-                val message = error.message ?: "导入失败。"
-                change { it.copy(dialog = GalleryDialog.None, importCandidates = emptyList(), importProgress = null, pendingImportTargetCollectionId = null, pendingImportDefaultArtistId = null, fieldError = message) }
-                messages.emit(GalleryFeedback.Saved(message))
-            }
-            finally { finishImportAttempt() }
-        }
+        session.start(candidates.map { it.uri }, targetCollectionId, defaultArtistId)
     }
 
     private fun retryImport(batchId: String) {
-        if (importJob?.isActive == true) return
-        val importer = mediaImporter ?: return
+        val session = importSession ?: return
+        if (session.isRunning) return
+        consumeMediaImportOutcome(session.state.value)
+        savedState.remove<Long>("hiddenImportAttempt")
         importResultJob?.cancel()
         change { it.copy(dialog = GalleryDialog.ImportProgress, importProgress = null) }
-        importJob = viewModelScope.launch {
-            try {
-                val result = importer.retryFailed(batchId) { progress -> changeTransient { it.copy(importProgress = progress) } }
-                notifyImportCompleted(result)
-                val showResult = state.value.dialog == GalleryDialog.ImportProgress
-                change { it.copy(dialog = if (showResult) GalleryDialog.ImportResult(result.id) else GalleryDialog.None, importResult = result, importProgress = null) }
-                if (!showResult) messages.emit(GalleryFeedback.Saved(importSummaryText(result)))
-                observeRoute()
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { change { it.copy(dialog = GalleryDialog.None, fieldError = error.message ?: "重试失败。") } }
-            finally { finishImportAttempt() }
-        }
+        session.retry(batchId)
     }
 
     private fun importSummaryText(result: dev.local.artistgallery.model.ImportBatchSummary): String {
@@ -898,11 +915,6 @@ class GalleryViewModel(
         val skipped = result.items.count { it.status == dev.local.artistgallery.model.ImportItemStatus.SKIPPED }
         val unresolved = result.items.count { it.status in setOf(dev.local.artistgallery.model.ImportItemStatus.FAILED, dev.local.artistgallery.model.ImportItemStatus.STAGED, dev.local.artistgallery.model.ImportItemStatus.FINALIZED) }
         return "导入处理结束：新增 $added 项，复用 $reused 项，跳过 $skipped 项，失败或待恢复 $unresolved 项。"
-    }
-
-    private fun notifyImportCompleted(result: dev.local.artistgallery.model.ImportBatchSummary) {
-        val completion = result.toImportCompletion()
-        if (!completion.cancelled) try { onImportCompleted(completion) } catch (_: RuntimeException) { }
     }
 
     private fun loadCoverImages(artistId: String) {

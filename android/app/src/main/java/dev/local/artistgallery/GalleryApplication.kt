@@ -10,6 +10,7 @@ import dev.local.artistgallery.data.preview.AssetReader
 import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.data.importing.MediaFileStore
 import dev.local.artistgallery.data.importing.MediaImportCoordinator
+import dev.local.artistgallery.data.importing.MediaImportSession
 import dev.local.artistgallery.data.importing.ImportNotifications
 import dev.local.artistgallery.data.archive.ArchiveImportCoordinator
 import kotlinx.coroutines.CoroutineScope
@@ -33,8 +34,19 @@ class GalleryApplication : Application() {
     val previewDecoder by lazy { PreviewDecoder(contentResolver, assetReader) }
     val mediaImportCoordinator by lazy { MediaImportCoordinator(this, mediaRepository, mediaFiles) }
     val importNotifications by lazy { ImportNotifications(this) }
+    val importWorkController by lazy {
+        dev.local.artistgallery.data.importing.ImportWorkController({
+            androidx.core.content.ContextCompat.startForegroundService(this, android.content.Intent(this, dev.local.artistgallery.data.importing.ImportForegroundService::class.java))
+        })
+    }
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    val archiveImporter by lazy { ArchiveImportCoordinator(this, database, roomRepository, mediaImportCoordinator, mediaFiles, applicationScope, importNotifications::completed) }
+    val archiveImporter by lazy { ArchiveImportCoordinator(this, database, roomRepository, mediaImportCoordinator, mediaFiles, applicationScope,
+        foregroundController = importWorkController, onImportCompleted = importNotifications::completed) }
+    val mediaImportSession by lazy {
+        MediaImportSession(applicationScope, repository,
+            { uris, target, progress -> mediaImportCoordinator.importUris(uris.map(android.net.Uri::parse), target, progress) },
+            mediaImportCoordinator::retryFailed, importWorkController, { archiveImporter.awaitRecovery() }, importNotifications::completed)
+    }
     val localTransfer by lazy {
         dev.local.artistgallery.data.exporting.LocalTransferCoordinator(this, database, mediaFiles, browsePreferences, applicationScope)
     }

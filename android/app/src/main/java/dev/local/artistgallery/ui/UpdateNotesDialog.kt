@@ -18,6 +18,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -26,7 +30,7 @@ import dev.local.artistgallery.model.VersionUpdate
 
 @Composable
 fun UpdateNotesDialog(updates: List<VersionUpdate>, showAll: Boolean = false, onDismiss: () -> Unit) {
-    val title = if (showAll) "更新日志" else "更新内容"
+    val title = if (showAll) "应用更新日志" else "更新内容"
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(decorFitsSystemWindows = false)) {
         val dialogInsets = galleryDialogWindowInsets(includeIme = false)
         BoxWithConstraints(
@@ -49,20 +53,18 @@ fun UpdateNotesDialog(updates: List<VersionUpdate>, showAll: Boolean = false, on
                     DIconButton(DIcon.Close, "关闭$title", onClick = onDismiss)
                 }
                 Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()).testTag("updateNotesChanges")) {
+                    updates.maxByOrNull { it.versionCode }?.let { current ->
+                        Text(buildAnnotatedString {
+                            append("当前版本：")
+                            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(current.versionName) }
+                            append("（版本代码 ${current.versionCode}） · ${current.date}")
+                        }, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 18.dp))
+                    }
                     (if (showAll) updates else updates.take(2)).forEachIndexed { index, update ->
                         if (index > 0) Spacer(Modifier.height(20.dp))
                         Text("${update.versionName} · ${update.date}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp).semantics { heading() })
-                        listOf("修复", "优化", "新增").forEach { category ->
-                            val changes = update.changes.filter { change ->
-                                val changeCategory = listOf("修复", "优化", "新增").firstOrNull { change.startsWith("【$it】") } ?: "新增"
-                                changeCategory == category
-                            }
-                            if (changes.isNotEmpty()) {
-                                Text("【$category】", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 6.dp, bottom = 6.dp).semantics { heading() })
-                                changes.forEach { change ->
-                                    Text("• ${change.removePrefix("【$category】")}", color = DColors.Muted, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 4.dp))
-                                }
-                            }
+                        update.changes.forEach { change ->
+                            Text("• $change", color = DColors.Muted, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 4.dp))
                         }
                     }
                 }
