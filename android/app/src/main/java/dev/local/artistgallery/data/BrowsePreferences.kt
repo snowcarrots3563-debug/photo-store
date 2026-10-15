@@ -24,6 +24,7 @@ data class BrowseOptions(
     val storageNoticeDismissed: Boolean = false,
     val artistImageSorts: Map<String, MediaSort> = emptyMap(),
     val collectionMediaSorts: Map<String, MediaSort> = emptyMap(),
+    val autoPlayVideos: Boolean = true,
 )
 
 interface BrowsePreferences {
@@ -58,6 +59,7 @@ class LocalBrowsePreferences(context: Context) : BrowsePreferences {
                 MediaSort.entries.firstOrNull { it.name == obj.optString(id) }?.let { id to it }
             }.toMap()
         },
+        preferences.getBoolean("autoPlayVideos", true),
     ))
     private fun readObject(value: String?): JSONObject = runCatching { JSONObject(value ?: "{}") }.getOrDefault(JSONObject())
     private fun readArray(value: String?): List<String> = runCatching {
@@ -72,6 +74,7 @@ class LocalBrowsePreferences(context: Context) : BrowsePreferences {
             putBoolean("cardEffects", options.cardEffects); putBoolean("playGifs", options.playGifs)
             putString("imageLayout", options.imageLayout.name)
             putBoolean("swipeDelete", options.swipeDelete)
+            putBoolean("autoPlayVideos", options.autoPlayVideos)
             putString("artistOrder", JSONArray(options.artistOrder).toString())
             putString("collectionOrders", JSONObject().apply {
                 options.collectionOrders.forEach { (id, order) -> put(id, JSONArray(order)) }

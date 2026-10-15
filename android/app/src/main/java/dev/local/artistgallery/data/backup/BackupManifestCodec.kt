@@ -25,7 +25,7 @@ object BackupManifestCodec {
                 put("id", a.id); put("name", a.name); put("createdAt", a.createdAt); put("updatedAt", a.updatedAt); put("coverAssetId", a.coverAssetId ?: JSONObject.NULL)
             } })
             put("collections", array(manifest.collections) { c -> JSONObject().apply {
-                put("id", c.id); put("artistId", c.artistId); put("name", c.name); put("isTemporary", c.isTemporary); put("createdAt", c.createdAt); put("updatedAt", c.updatedAt)
+                put("id", c.id); put("artistId", c.artistId); put("name", c.name); put("isTemporary", c.isTemporary); put("createdAt", c.createdAt); put("updatedAt", c.updatedAt); put("isDefault", c.isDefault)
             } })
             put("references", array(manifest.references) { r -> JSONObject().apply {
                 put("collectionId", r.collectionId); put("assetId", r.assetId); put("manualOrder", r.manualOrder)
@@ -48,7 +48,7 @@ object BackupManifestCodec {
                 version = 1, createdAt = document.getLong("createdAt"),
                 assets = rows(document.getJSONArray("assets")) { a -> BackupAsset(a.getString("id"), a.getString("originalName"), a.getString("mediaType"), a.getLong("byteSize"), a.nullInt("width"), a.nullInt("height"), a.getString("sha256"), a.getLong("createdAt")) },
                 artists = rows(document.getJSONArray("artists")) { a -> ArtistEntity(a.getString("id"), a.getString("name"), a.getLong("createdAt"), a.getLong("updatedAt"), a.nullString("coverAssetId")) },
-                collections = rows(document.getJSONArray("collections")) { c -> CollectionEntity(c.getString("id"), c.getString("artistId"), c.getString("name"), c.getBoolean("isTemporary"), c.getLong("createdAt"), c.getLong("updatedAt")) },
+                collections = rows(document.getJSONArray("collections")) { c -> CollectionEntity(c.getString("id"), c.getString("artistId"), c.getString("name"), c.getBoolean("isTemporary"), c.getLong("createdAt"), c.getLong("updatedAt"), if (c.has("isDefault")) c.getBoolean("isDefault") else false) },
                 references = rows(document.getJSONArray("references")) { r -> CollectionMediaEntity(r.getString("collectionId"), r.getString("assetId"), r.getInt("manualOrder"), r.getString("sourceName"), r.nullString("sourceRelativePath")) },
                 settings = readSettings(document.getJSONObject("settings")),
             )
@@ -60,6 +60,7 @@ object BackupManifestCodec {
 
     internal fun settingsJson(settings: BrowseOptions): JSONObject = JSONObject().apply {
         put("cardEffects", settings.cardEffects); put("playGifs", settings.playGifs); put("swipeDelete", settings.swipeDelete)
+        put("autoPlayVideos", settings.autoPlayVideos)
         put("imageLayout", settings.imageLayout.name); put("storageNoticeDismissed", settings.storageNoticeDismissed)
         put("artistOrder", JSONArray(settings.artistOrder))
         put("collectionOrders", JSONObject().apply { settings.collectionOrders.forEach { (id, order) -> put(id, JSONArray(order)) } })
@@ -80,6 +81,7 @@ object BackupManifestCodec {
         collectionMediaSorts = if (!json.has("collectionMediaSorts")) emptyMap() else json.getJSONObject("collectionMediaSorts").let { obj ->
             boundedKeys(obj).associateWith { MediaSort.valueOf(obj.getString(it)) }
         },
+        autoPlayVideos = if (!json.has("autoPlayVideos")) true else json.getBoolean("autoPlayVideos"),
     )
 
     private fun JSONObject.nullInt(key: String): Int? = if (isNull(key)) null else getInt(key)

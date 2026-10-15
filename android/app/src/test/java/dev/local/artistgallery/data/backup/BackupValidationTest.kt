@@ -60,4 +60,19 @@ class BackupValidationTest {
         BackupValidation.validate(m)
         MediaSort.entries.forEach { BackupValidation.validate(m.copy(settings = m.settings.copy(collectionMediaSorts = mapOf(collection to it)))) }
     }
+    @Test fun multipleDefaultCollectionsForOneArtistAreRejected() {
+        val m = manifest()
+        val first = m.collections.single().copy(isDefault = true)
+        val second = first.copy(id = UUID.randomUUID().toString(), name = "另一个")
+        invalid(m.copy(collections = listOf(first, second)))
+    }
+
+    @Test fun renamedEmptyDefaultsForDifferentArtistsAreValid() {
+        val m = manifest()
+        val other = UUID.randomUUID().toString()
+        BackupValidation.validate(m.copy(assets = emptyList(), references = emptyList(),
+            artists = listOf(m.artists.single().copy(coverAssetId = null), ArtistEntity(other, "另一位", 1, 1)),
+            collections = listOf(m.collections.single().copy(name = "常用", isDefault = true),
+                CollectionEntity(UUID.randomUUID().toString(), other, "默认图集", false, 1, 1, isDefault = true))))
+    }
 }

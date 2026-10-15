@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 class GalleryApplication : Application() {
     private val database by lazy {
         Room.databaseBuilder(this, GalleryDatabase::class.java, "gallery.db")
-            .addMigrations(GalleryDatabase.MIGRATION_1_2, GalleryDatabase.MIGRATION_2_3, GalleryDatabase.MIGRATION_3_4, GalleryDatabase.MIGRATION_4_5)
+            .addMigrations(GalleryDatabase.MIGRATION_1_2, GalleryDatabase.MIGRATION_2_3, GalleryDatabase.MIGRATION_3_4, GalleryDatabase.MIGRATION_4_5, GalleryDatabase.MIGRATION_5_6)
             .build()
     }
     private val roomRepository by lazy { RoomGalleryRepository(database) }

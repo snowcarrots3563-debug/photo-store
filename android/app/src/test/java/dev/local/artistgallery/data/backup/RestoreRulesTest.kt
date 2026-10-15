@@ -146,4 +146,20 @@ class RestoreRulesTest {
         assertEquals(candidates.toSet(), mapping.values.toSet())
         assertTrue(mapping.all { (oldId, newId) -> oldId != newId })
     }
+    @Test fun renamedEmptyDefaultKeepsIdentityAcrossIdRemappingWithoutCreatingAnother() {
+        val source = manifest.copy(assets = emptyList(), references = emptyList(),
+            artists = listOf(artist.copy(coverAssetId = null)),
+            collections = listOf(collection.copy(name = "常用收藏", isDefault = true)))
+        val rows = RestoreRules.rows(source, emptyMap(), artistIds, collectionIds, emptyList())
+        assertEquals(1, rows.artists.size)
+        assertEquals(1, rows.collections.size)
+        assertTrue(rows.collections.single().isDefault)
+        assertEquals("常用收藏", rows.collections.single().name)
+        assertEquals(id(12), rows.collections.single().id)
+        assertEquals(id(11), rows.collections.single().artistId)
+        assertTrue(rows.assets.isEmpty())
+        assertTrue(rows.references.isEmpty())
+        val oldRows = RestoreRules.rows(source.copy(collections = listOf(collection)), emptyMap(), artistIds, collectionIds, emptyList())
+        assertFalse(oldRows.collections.single().isDefault)
+    }
 }

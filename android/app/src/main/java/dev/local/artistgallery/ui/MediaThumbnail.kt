@@ -6,6 +6,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -39,14 +41,14 @@ import kotlinx.coroutines.withContext
 fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp) {
     var size by remember { mutableStateOf(IntSize.Zero) }
     var image by remember(storageKey, type, previewDecoder, size) {
-        mutableStateOf<Bitmap?>(if (type != MediaType.VIDEO && size.width > 0 && size.height > 0) {
-            previewDecoder?.cachedThumbnail(storageKey, size.width, size.height)
+        mutableStateOf<Bitmap?>(if (size.width > 0 && size.height > 0) {
+            previewDecoder?.cachedThumbnail(storageKey, size.width, size.height, type)
         } else null)
     }
     LaunchedEffect(storageKey, type, previewDecoder, size) {
-        if (type != MediaType.VIDEO && size.width > 0 && size.height > 0) {
+        if (size.width > 0 && size.height > 0) {
             image = try {
-                previewDecoder?.decodeThumbnail(storageKey, size.width, size.height)
+                previewDecoder?.decodeThumbnail(storageKey, size.width, size.height, type)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -58,6 +60,11 @@ fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewD
         val bitmap = image
         if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else DIconImage(if (type == MediaType.VIDEO) DIcon.Play else DIcon.Image, Color(0xFF969EAD))
+        if (type == MediaType.VIDEO && bitmap != null) {
+            Box(Modifier.size(40.dp).background(Color.Black.copy(alpha = .5f), CircleShape), contentAlignment = Alignment.Center) {
+                DIconImage(DIcon.Play, Color.White)
+            }
+        }
     }
 }
 

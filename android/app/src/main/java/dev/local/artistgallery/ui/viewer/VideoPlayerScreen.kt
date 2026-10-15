@@ -40,6 +40,7 @@ fun VideoPlayerScreen(state: GalleryUiState, assetId: String, assetReader: Asset
     val item = state.mediaItems.firstOrNull { it.id == assetId }
     val context = LocalContext.current
     val uri = remember(item?.storageKey, assetReader) { runCatching { if (item == null) null else assetReader?.contentUri(item.storageKey) }.getOrNull() }
+    val initialAutoPlay = remember(uri) { state.browseOptions.autoPlayVideos }
     val player = remember(uri) {
         uri?.let {
             runCatching {
@@ -57,10 +58,11 @@ fun VideoPlayerScreen(state: GalleryUiState, assetId: String, assetReader: Asset
     var durationMs by remember(player) { mutableLongStateOf(0L) }
     var sliderMs by remember(player) { mutableFloatStateOf(0f) }
     var draggingSlider by remember(player) { mutableStateOf(false) }
+    var pendingInitialPlay by remember(player) { mutableStateOf(initialAutoPlay) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
 
-    DisposableEffect(player, lifecycleOwner) {
+    DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -72,20 +74,33 @@ fun VideoPlayerScreen(state: GalleryUiState, assetId: String, assetReader: Asset
                 isReady = false
             }
         }
-        val lifecycleObserver = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) player?.pause()
-        }
         player?.addListener(listener)
         player?.prepare()
-        player?.pause()
         isReady = player?.playbackState == Player.STATE_READY
-        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
         onDispose {
-            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
             player?.removeListener(listener)
             player?.pause()
             player?.release()
         }
+    }
+    DisposableEffect(player, lifecycleOwner) {
+        val lifecycleObserver = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> if (pendingInitialPlay) {
+                    pendingInitialPlay = false
+                    player?.play()
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    pendingInitialPlay = false
+                    player?.pause()
+                }
+                else -> Unit
+            }
+        }
+        // addObserver replays ON_START for an already started owner, or waits for its first start.
+        if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) player?.pause()
+        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(lifecycleObserver) }
     }
     DisposableEffect(view, isPlaying) {
         view.keepScreenOn = isPlaying
@@ -119,11 +134,17 @@ fun VideoPlayerScreen(state: GalleryUiState, assetId: String, assetReader: Asset
                     update = { it.player = player },
                     onRelease = { it.player = null },
                 )
-                DIconButton(
-                    if (isPlaying) DIcon.Pause else DIcon.Play,
-                    if (isPlaying) "暂停视频" else "播放视频",
-                    enabled = isReady,
-                ) { if (isPlaying) player.pause() else player.play() }
+                Box(Modifier.align(Alignment.BottomStart).padding(12.dp).size(48.dp).background(Color.Black.copy(alpha = .55f), RoundedCornerShape(20.dp))) {
+                    DIconButton(
+                        if (isPlaying) DIcon.Pause else DIcon.Play,
+                        if (isPlaying) "暂停视频" else "播放视频",
+                        enabled = isReady,
+                        tint = Color.White,
+                    ) {
+                        pendingInitialPlay = false
+                        if (isPlaying) player.pause() else player.play()
+                    }
+                }
             } else {
                 Text(errorMessage ?: "视频文件暂时无法读取", color = Color.White, fontSize = 14.sp)
             }

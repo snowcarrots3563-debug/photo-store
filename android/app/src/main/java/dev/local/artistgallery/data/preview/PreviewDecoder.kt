@@ -15,9 +15,11 @@ import android.graphics.Rect
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.SystemClock
 import android.util.LruCache
+import dev.local.artistgallery.model.MediaType
 import java.io.FileNotFoundException
 import java.io.IOException
 import kotlin.math.max
@@ -34,7 +36,7 @@ class PreviewDecoder(
     private val contentResolver: ContentResolver,
     private val assetReader: AssetReader,
 ) {
-    private data class ThumbnailKey(val storageKey: String, val width: Int, val height: Int)
+    private data class ThumbnailKey(val storageKey: String, val width: Int, val height: Int, val type: MediaType)
     private val thumbnailCache = object : LruCache<ThumbnailKey, Bitmap>(
         (Runtime.getRuntime().maxMemory() / 16).coerceIn(4L * 1024 * 1024, 32L * 1024 * 1024).toInt(),
     ) {
@@ -42,16 +44,17 @@ class PreviewDecoder(
     }
     private val thumbnailDecodes = Semaphore(2)
 
-    fun cachedThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int): Bitmap? =
-        thumbnailCache.get(ThumbnailKey(storageKey, targetWidthPx, targetHeightPx))
+    fun cachedThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int, type: MediaType = MediaType.IMAGE): Bitmap? =
+        thumbnailCache.get(ThumbnailKey(storageKey, targetWidthPx, targetHeightPx, type))
 
-    suspend fun decodeThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int): Bitmap? {
-        val key = ThumbnailKey(storageKey, targetWidthPx, targetHeightPx)
+    suspend fun decodeThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int, type: MediaType = MediaType.IMAGE): Bitmap? {
+        val key = ThumbnailKey(storageKey, targetWidthPx, targetHeightPx, type)
         thumbnailCache.get(key)?.let { return it }
         return withContext(Dispatchers.IO) {
             thumbnailDecodes.withPermit {
                 currentCoroutineContext().ensureActive()
-                thumbnailCache.get(key) ?: readThumbnail(storageKey, targetWidthPx, targetHeightPx)?.also {
+                thumbnailCache.get(key) ?: (if (type == MediaType.VIDEO) readVideoThumbnail(storageKey, targetWidthPx, targetHeightPx)
+                    else readThumbnail(storageKey, targetWidthPx, targetHeightPx))?.also {
                     it.prepareToDraw()
                     // A native decode can finish after its row leaves the screen; retain it for a return scroll.
                     thumbnailCache.put(key, it)
@@ -73,6 +76,40 @@ class PreviewDecoder(
         }
         // ImageDecoder.setCrop crops only its output; keep the full temporary image fit-sized.
         return readBitmap(storageKey, targetWidthPx, targetHeightPx)?.let { cropThumbnail(it, targetWidthPx, targetHeightPx) }
+    }
+
+    private fun readVideoThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int): Bitmap? {
+        var frame: Bitmap? = null
+        try {
+            val descriptor = contentResolver.openFileDescriptor(assetReader.contentUri(storageKey), "r") ?: return null
+            descriptor.use {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(it.fileDescriptor)
+                    frame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        try { retriever.getFrameAtIndex(0) }
+                        catch (_: IllegalArgumentException) { null }
+                        catch (_: IllegalStateException) { null }
+                    } else null
+                    // A non-null black frame is the first frame too; never search ahead for a nicer image.
+                    if (frame == null) {
+                        frame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: targetWidthPx
+                            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: targetHeightPx
+                            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+                            val rotated = rotation == 90 || rotation == 270
+                            val size = fittedSize(if (rotated) height else width, if (rotated) width else height, targetWidthPx, targetHeightPx, crop = true)
+                            retriever.getScaledFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST, size.first, size.second)
+                        } else retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST)
+                    }
+                } finally { retriever.release() }
+            }
+            // Retriever output already has native orientation. Index/API26 frames can briefly be full-size.
+            return frame?.let { cropThumbnail(it, targetWidthPx, targetHeightPx) }
+        } catch (error: Throwable) {
+            frame?.takeUnless { it.isRecycled }?.recycle()
+            throw error
+        }
     }
 
     private fun readBitmap(storageKey: String, targetWidthPx: Int, targetHeightPx: Int): Bitmap? {
@@ -160,13 +197,18 @@ class PreviewDecoder(
     }
 
     private fun cropThumbnail(bitmap: Bitmap, targetWidthPx: Int, targetHeightPx: Int): Bitmap {
-        val scaledSize = fittedSize(bitmap.width, bitmap.height, targetWidthPx, targetHeightPx, crop = true)
-        val scaled = Bitmap.createScaledBitmap(bitmap, scaledSize.first, scaledSize.second, true)
-        if (scaled !== bitmap) bitmap.recycle()
-        val width = min(targetWidthPx.coerceAtLeast(1), scaled.width)
-        val height = min(targetHeightPx.coerceAtLeast(1), scaled.height)
-        return Bitmap.createBitmap(scaled, (scaled.width - width) / 2, (scaled.height - height) / 2, width, height).also {
-            if (it !== scaled) scaled.recycle()
+        var scaled: Bitmap? = null
+        var cropped: Bitmap? = null
+        try {
+            val scaledSize = fittedSize(bitmap.width, bitmap.height, targetWidthPx, targetHeightPx, crop = true)
+            val resized = Bitmap.createScaledBitmap(bitmap, scaledSize.first, scaledSize.second, true)
+            scaled = resized
+            val width = min(targetWidthPx.coerceAtLeast(1), resized.width)
+            val height = min(targetHeightPx.coerceAtLeast(1), resized.height)
+            return Bitmap.createBitmap(resized, (resized.width - width) / 2, (resized.height - height) / 2, width, height).also { cropped = it }
+        } finally {
+            if (bitmap !== cropped) bitmap.recycle()
+            scaled?.takeUnless { it === bitmap || it === cropped }?.recycle()
         }
     }
 

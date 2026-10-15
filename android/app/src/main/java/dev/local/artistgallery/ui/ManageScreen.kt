@@ -54,6 +54,8 @@ fun ManageScreen(state: GalleryUiState, padding: Dp, onEvent: (GalleryEvent) -> 
             BrowseSwitchRow("播放 GIF 动画", "关闭后显示静态首帧，原 GIF 保留", state.browseOptions.playGifs) { onEvent(GalleryEvent.SetPlayGifs(it)) }
             DDivider()
             BrowseSwitchRow("开启滑动删除", "关闭后仍可长按图片进入选择模式", state.browseOptions.swipeDelete) { onEvent(GalleryEvent.SetSwipeDelete(it)) }
+            DDivider()
+            BrowseSwitchRow("打开视频时自动播放", "关闭后先暂停，可手动播放", state.browseOptions.autoPlayVideos) { onEvent(GalleryEvent.SetAutoPlayVideos(it)) }
         }
         state.recentImportBatches.firstOrNull { it.status != "COMPLETED" }?.let { batch ->
             ManageLabel("导入记录")

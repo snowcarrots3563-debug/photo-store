@@ -183,13 +183,13 @@ interface GalleryDao {
     @Query("SELECT EXISTS(SELECT 1 FROM CollectionMedia WHERE collectionId = :collectionId)")
     suspend fun collectionHasMedia(collectionId: String): Boolean
 
-    @Query("DELETE FROM WorkCollection WHERE id = :collectionId")
+    @Query("DELETE FROM WorkCollection WHERE id = :collectionId AND isDefault = 0")
     suspend fun deleteCollection(collectionId: String): Int
 
     @Query("""
         DELETE FROM WorkCollection WHERE id IN (
             SELECT collectionId FROM CollectionMedia WHERE assetId IN (:assetIds)
-        ) AND NOT EXISTS (
+        ) AND isDefault = 0 AND NOT EXISTS (
             SELECT 1 FROM CollectionMedia WHERE collectionId = WorkCollection.id AND assetId NOT IN (:assetIds)
         )
     """)

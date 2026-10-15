@@ -151,7 +151,9 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
                         DDivider(4)
                         DRow("更换封面", icon = DIcon.Image, compact = true) { if (id != null) onEvent(GalleryEvent.OpenArtistCover(id)) }
                         DDivider(4)
-                        DRow("导入", icon = DIcon.Import, compact = true) { onEvent(GalleryEvent.OpenImportTarget(artistId = id)) }
+                        DRow("从相册导入", icon = DIcon.Image, compact = true) { onEvent(GalleryEvent.OpenImportTarget(artistId = id)) }
+                        DDivider(4)
+                        DRow("从文件导入", icon = DIcon.Import, compact = true) { onEvent(GalleryEvent.OpenImportTarget(artistId = id, fromFiles = true)) }
                         DDivider(4)
                         DRow("导出这位画师", icon = DIcon.Export, compact = true) {
                             if (onExport != null && id != null) { onEvent(GalleryEvent.DismissDialog); onExport(ExportScope.Artists(listOf(id))) }
@@ -280,7 +282,9 @@ private fun DialogHint(text: String) { Text(text, fontSize = 13.sp, lineHeight =
 @Composable
 private fun ImportTargetContent(state: GalleryUiState, target: GalleryDialog.ImportTarget, onEvent: (GalleryEvent) -> Unit) {
     val addingExisting = state.pendingAddAssetIds.isNotEmpty()
-    DialogHint(if (addingExisting) "选择要加入这些媒体的作品集。" else "选择目标作品集，也可以先导入到未归组媒体。")
+    val defaultName = state.importTargetCollections.firstOrNull { it.isDefault }?.name ?: "默认图集"
+    val defaultReady = !addingExisting && target.artistId != null && (target.allowDefault || state.importTargetCollections.any { it.isDefault })
+    DialogHint(if (addingExisting) "选择要加入这些媒体的作品集。" else if (defaultReady) "未选择其他作品集时，将导入到$defaultName。" else "选择目标作品集，也可以先导入到未归组媒体。")
     val selectedArtist = state.artists.firstOrNull { it.id == target.artistId }
     var artistMenu by remember { mutableStateOf(false) }
     DButton(selectedArtist?.name ?: "选择画师", soft = true, modifier = Modifier.fillMaxWidth()) { artistMenu = true }
@@ -295,15 +299,19 @@ private fun ImportTargetContent(state: GalleryUiState, target: GalleryDialog.Imp
     if (target.artistId != null) {
         Spacer(Modifier.height(10.dp))
         var collectionMenu by remember { mutableStateOf(false) }
-        DButton(selectedCollection?.name ?: "选择作品集", soft = true, modifier = Modifier.fillMaxWidth(), enabled = state.importTargetCollections.isNotEmpty()) { collectionMenu = true }
+        val options = if (defaultReady) state.importTargetCollections.filterNot { it.isDefault } else state.importTargetCollections
+        DButton(selectedCollection?.name ?: if (defaultReady && !target.toUnassigned) defaultName else "选择作品集", soft = true, modifier = Modifier.fillMaxWidth(), enabled = options.isNotEmpty()) { collectionMenu = true }
         if (collectionMenu) {
-            ImportTargetOptionDialog("选择作品集", state.importTargetCollections.map { it.id to it.name }, target.collectionId,
+            ImportTargetOptionDialog("选择作品集", options.map { it.id to it.name }, target.collectionId,
                 onDismissRequest = { collectionMenu = false }) { id ->
                 collectionMenu = false
                 onEvent(GalleryEvent.ImportCollectionSelected(id))
             }
         }
-        if (state.importTargetCollections.isEmpty()) DialogHint("该画师还没有作品集，请先创建作品集，或导入到未归组媒体。")
+        if (defaultReady && (target.collectionId != null || target.toUnassigned)) {
+            DButton("使用$defaultName", modifier = Modifier.fillMaxWidth().padding(top = 8.dp), soft = true) { onEvent(GalleryEvent.ImportCollectionSelected(null)) }
+        }
+        if (state.importTargetCollections.isEmpty() && !defaultReady) DialogHint("该画师还没有作品集，请先创建作品集，或导入到未归组媒体。")
     }
     if (!addingExisting) {
         DButton("导入到未归组媒体", modifier = Modifier.fillMaxWidth().padding(top = 8.dp), soft = target.toUnassigned) {
@@ -314,7 +322,7 @@ private fun ImportTargetContent(state: GalleryUiState, target: GalleryDialog.Imp
     if (state.fieldError != null) Text(state.fieldError, color = DColors.Error, fontSize = 13.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 8.dp))
     Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         DButton("取消", Modifier.weight(1f)) { onEvent(GalleryEvent.DismissDialog) }
-        DButton(if (addingExisting) "加入所选" else if (target.fromFiles) "选择文件" else "选择媒体", Modifier.weight(1f), primary = true, enabled = if (addingExisting) target.collectionId != null else target.toUnassigned || target.collectionId != null) { onEvent(GalleryEvent.ConfirmImportTarget) }
+        DButton(if (addingExisting) "加入所选" else if (target.fromFiles) "选择文件" else "选择媒体", Modifier.weight(1f), primary = true, enabled = if (addingExisting) target.collectionId != null else defaultReady || target.toUnassigned || target.collectionId != null) { onEvent(GalleryEvent.ConfirmImportTarget) }
     }
 }
 
@@ -370,7 +378,10 @@ private fun ImportPreviewContent(state: GalleryUiState, onEvent: (GalleryEvent) 
             }, DIcon.Image, compact = true) { }
         }
     }
-    DialogHint(if (state.pendingImportTargetCollectionId == null) "导入后会出现在未归组媒体中。" else "导入后会加入所选作品集。")
+    val defaultArtistId = state.pendingImportDefaultArtistId
+    val defaultName = state.importTargetCollections.firstOrNull { it.artistId == defaultArtistId && it.isDefault }?.name
+        ?: state.artistDetail?.takeIf { it.artist.id == defaultArtistId }?.collections?.firstOrNull { it.isDefault }?.name ?: "默认图集"
+    DialogHint(if (defaultArtistId != null) "导入后会加入$defaultName。" else if (state.pendingImportTargetCollectionId == null) "导入后会出现在未归组媒体中。" else "导入后会加入所选作品集。")
     Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         DButton("取消", Modifier.weight(1f)) { onEvent(GalleryEvent.DismissDialog) }
         DButton("开始导入", Modifier.weight(1f), primary = true) { onEvent(GalleryEvent.ConfirmImport) }

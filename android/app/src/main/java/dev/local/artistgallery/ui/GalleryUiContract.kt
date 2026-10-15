@@ -37,7 +37,7 @@ sealed interface GalleryDialog {
     data class Unavailable(val feature: String, val phase: Int) : GalleryDialog
     data object About : GalleryDialog
     data object UpdateHistory : GalleryDialog
-    data class ImportTarget(val artistId: String?, val collectionId: String?, val toUnassigned: Boolean = false, val fromFiles: Boolean = false) : GalleryDialog
+    data class ImportTarget(val artistId: String?, val collectionId: String?, val toUnassigned: Boolean = false, val fromFiles: Boolean = false, val allowDefault: Boolean = false) : GalleryDialog
     data object ImportPreview : GalleryDialog
     data object ImportProgress : GalleryDialog
     data class ImportResult(val batchId: String) : GalleryDialog
@@ -69,6 +69,7 @@ data class GalleryUiState(
     val importProgress: ImportProgress? = null,
     val importResult: ImportBatchSummary? = null,
     val pendingImportTargetCollectionId: String? = null,
+    val pendingImportDefaultArtistId: String? = null,
     val pendingAddAssetIds: List<String> = emptyList(),
     val recentImportBatches: List<ImportBatchSummary> = emptyList(),
     val selectedMediaIds: Set<String> = emptySet(),
@@ -140,6 +141,7 @@ sealed interface GalleryEvent {
     data class SetCardEffects(val enabled: Boolean) : GalleryEvent
     data class SetPlayGifs(val enabled: Boolean) : GalleryEvent
     data class SetSwipeDelete(val enabled: Boolean) : GalleryEvent
+    data class SetAutoPlayVideos(val enabled: Boolean) : GalleryEvent
 }
 sealed interface GalleryFeedback {
     data class Saved(val message: String, val scrollToArtistId: String? = null) : GalleryFeedback

@@ -129,7 +129,7 @@ fun ArchiveImportDialog(
                         val skipped = state.items.count { it.status == "SKIPPED" }
                         val cancelled = state.items.count { it.status == "CANCELLED" }
                         val failed = state.items.count { it.status !in setOf("COMPLETE", "REUSED", "SKIPPED", "CANCELLED") }
-                        Hint("新增 $added 项，复用 $reused 项，跳过 $skipped 项，失败／未完成 $failed 项，取消 $cancelled 项。\n新增作品集 ${state.collectionNames.size} 个。")
+                        Hint("新增 $added 项，复用 $reused 项，跳过 $skipped 项，失败／未完成 $failed 项，取消 $cancelled 项。\n目标作品集 ${state.collectionNames.size} 个。")
                         LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 360.dp)) {
                             items(state.items, key = { it.id }) { item ->
                                 val label = when (item.status) { "COMPLETE" -> "新增资产"; "REUSED" -> "复用已有原图"; "SKIPPED" -> "跳过"; "CANCELLED" -> "已取消"; else -> "失败／待恢复" }

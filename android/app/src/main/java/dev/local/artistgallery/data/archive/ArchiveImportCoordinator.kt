@@ -11,6 +11,7 @@ import dev.local.artistgallery.data.importing.MediaFileStore
 import dev.local.artistgallery.data.importing.MediaImportCoordinator
 import dev.local.artistgallery.data.importing.ImportCompletion
 import dev.local.artistgallery.data.importing.ImportResultKind
+import dev.local.artistgallery.model.SaveResult
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -230,7 +231,13 @@ class ArchiveImportCoordinator(
             val groups = dao.archiveGroups(requireNotNull(sessionId))
             preview = preview.map { group ->
                 val stored = groups.firstOrNull { it.relativeDirectory == group.relativeDirectory }
-                group.copy(name = stored?.let { dao.getCollection(it.id)?.name ?: it.name } ?: group.name)
+                group.copy(name = stored?.let { dao.getCollection(targetCollectionId(it, oldItems))?.name ?: it.name } ?: group.name)
+            }
+        } else {
+            val defaultName = artist.collections.firstOrNull { it.isDefault }?.name
+                ?: NameRules.nextDefaultName(artist.collections.map { it.name })
+            preview = preview.map { group ->
+                if (group.canImport && group.relativeDirectory.isEmpty()) group.copy(name = defaultName) else group
             }
         }
         if (taskCommitted && oldItems.any { item -> readerEntries.none { "archive://$sessionId/${it.index}" == item.sourceUri && it.path == item.sourceRelativePath && it.byteSize == item.byteSize } }) {
@@ -246,20 +253,31 @@ class ArchiveImportCoordinator(
             if (!taskCommitted) {
                 val id = requireNotNull(sessionId)
                 val now = System.currentTimeMillis()
-                val groups = state.value.groups.map { ArchiveGroupEntity(UUID.randomUUID().toString(), id, requireNotNull(state.value.artistId), it.name, it.relativeDirectory) }
-                val items = state.value.groups.flatMapIndexed { groupIndex, group ->
-                    group.items.map { item ->
-                        ImportItemEntity(UUID.randomUUID().toString(), id, null, "archive://$id/${item.entry.index}", false,
-                            item.entry.path.substringAfterLast('/'), item.mediaType?.name ?: "UNKNOWN", UUID.randomUUID().toString(), UUID.randomUUID().toString(),
-                            null, item.entry.byteSize, if (item.mediaType == null) "SKIPPED" else "QUEUED", item.skipReason, now + item.entry.index, now,
-                            groups[groupIndex].id, item.entry.path)
-                    }
-                }
                 database.withTransaction {
+                    val artistId = requireNotNull(state.value.artistId)
+                    if (dao.getArtist(artistId) == null) throw IOException("目标画师不存在。")
+                    val default = if (state.value.groups.any { it.canImport && it.relativeDirectory.isEmpty() }) {
+                        val saved = repository.ensureDefaultCollection(artistId) as? SaveResult.Saved
+                            ?: throw IOException("无法创建默认图集。")
+                        dao.getCollection(saved.id)?.takeIf { it.artistId == artistId && it.isDefault }
+                            ?: throw IOException("默认图集不可用。")
+                    } else null
+                    val groups = state.value.groups.map { group ->
+                        ArchiveGroupEntity(UUID.randomUUID().toString(), id, artistId,
+                            if (group.relativeDirectory.isEmpty() && default != null) default.name else group.name, group.relativeDirectory)
+                    }
+                    val items = state.value.groups.flatMapIndexed { groupIndex, group ->
+                        group.items.map { item ->
+                            ImportItemEntity(UUID.randomUUID().toString(), id, if (group.relativeDirectory.isEmpty()) default?.id else null,
+                                "archive://$id/${item.entry.index}", false, item.entry.path.substringAfterLast('/'), item.mediaType?.name ?: "UNKNOWN",
+                                UUID.randomUUID().toString(), UUID.randomUUID().toString(), null, item.entry.byteSize,
+                                if (item.mediaType == null) "SKIPPED" else "QUEUED", item.skipReason, now + item.entry.index, now, groups[groupIndex].id, item.entry.path)
+                        }
+                    }
                     dao.insertImportBatch(ImportBatchEntity(id, null, "COPYING", now, now))
                     dao.insertImportItems(items)
                     dao.insertArchiveGroups(groups)
-                    dao.insertArchiveTask(ArchiveTaskEntity(id, requireNotNull(state.value.artistId), state.value.format, requireNotNull(mainName), JSONArray(state.value.files).toString(), now))
+                    dao.insertArchiveTask(ArchiveTaskEntity(id, artistId, state.value.format, requireNotNull(mainName), JSONArray(state.value.files).toString(), now))
                 }
                 taskCommitted = true
                 File(directory(id), ".preparing").delete()
@@ -371,7 +389,7 @@ class ArchiveImportCoordinator(
                 }
                 val names = JSONArray(task.selectedNames).let { array -> (0 until array.length()).map { array.getString(it) } }
                 val items = repository.importItems(id)
-                val collectionNames = dao.archiveGroups(id).mapNotNull { dao.getCollection(it.id)?.name }
+                val collectionNames = collectionNames(dao.archiveGroups(id), items)
                 releaseSession()
                 sessionId = id; mainName = task.mainName; taskCommitted = true
                 update { ArchiveImportState(visible = true, step = ArchiveStep.Result, format = task.format,
@@ -469,10 +487,16 @@ class ArchiveImportCoordinator(
         }
         repository.updateImportBatch(id, status)
         if (sessionId == id) {
-            val names = dao.archiveGroups(id).mapNotNull { dao.getCollection(it.id)?.name }
+            val names = collectionNames(dao.archiveGroups(id), items)
             update { it.copy(items = items, collectionNames = names) }
         }
     }
+
+    private fun targetCollectionId(group: ArchiveGroupEntity, items: List<ImportItemEntity>): String =
+        items.firstOrNull { it.archiveGroupId == group.id && it.targetCollectionId != null }?.targetCollectionId ?: group.id
+
+    private suspend fun collectionNames(groups: List<ArchiveGroupEntity>, items: List<ImportItemEntity>): List<String> =
+        groups.map { targetCollectionId(it, items) }.distinct().mapNotNull { dao.getCollection(it)?.name }.distinct()
 
     private suspend fun releaseSession() {
         if (!taskCommitted) cleanupVolumes()

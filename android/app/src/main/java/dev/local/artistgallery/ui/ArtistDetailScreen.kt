@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import dev.local.artistgallery.data.ArtistImageLayout
 import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.model.SampleCoverKey
@@ -174,7 +175,10 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { reorder.viewport = it.boundsInRoot() }.nestedScroll(tabScrollConnection).testTag("artistMediaList"), state = listState, contentPadding = PaddingValues(start = padding, end = padding, bottom = 126.dp)) {
                 if (state.artistTab == ArtistTab.Images) {
-                    if (state.mediaItems.isEmpty()) item { DEmpty("还没有图片", "导入第一份收藏，或先创建作品集。", "导入") { onEvent(GalleryEvent.OpenImportTarget(artistId = artist.id)) } }
+                    if (state.mediaItems.isEmpty()) item {
+                        val defaultName = detail.collections.firstOrNull { it.isDefault }?.name ?: "默认图集"
+                        DEmpty("还没有图片", "导入到$defaultName，也可以选择其他作品集。", "导入") { onEvent(GalleryEvent.OpenDialog(GalleryDialog.AddMenu)) }
+                    }
                     else if (state.browseOptions.imageLayout == ArtistImageLayout.List) itemsIndexed(state.mediaItems, key = { _, media -> media.id }) { index, media ->
                         if (index > 0) Spacer(Modifier.height(8.dp))
                         if (state.mediaSelectionMode) {
@@ -234,7 +238,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                         key(c.id) {
                             val isSelected = c.id in state.selectedEntityIds
                             ReorderRow(reorder, c.id, Modifier.testTag("collectionRow:${c.id}").semantics {
-                                if (selectingCollections) {
+                                if (selectingCollections && !c.isDefault) {
                                     selected = isSelected
                                     toggleableState = if (isSelected) ToggleableState.On else ToggleableState.Off
                                 }
@@ -242,15 +246,16 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                                 Column {
                                     if (index > 0) DDivider()
                                     DRow(c.name, "${c.imageCount} 张图片" + if (c.videoCount > 0) " · ${c.videoCount} 个视频" else "", cover = c.cover, fixtureCover = fixtureCover, previewDecoder = previewDecoder,
-                                        onLongClick = if (selectingCollections || state.isSaving) null else ({ onEvent(GalleryEvent.StartEntitySelection(EntitySelectionKind.Collections, c.id)) }),
+                                        onLongClick = if (c.isDefault || selectingCollections || state.isSaving) null else ({ onEvent(GalleryEvent.StartEntitySelection(EntitySelectionKind.Collections, c.id)) }),
                                         trailing = if (selectingCollections) ({
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Checkbox(c.id in state.selectedEntityIds, onCheckedChange = null)
+                                                Checkbox(!c.isDefault && c.id in state.selectedEntityIds, onCheckedChange = null, enabled = !c.isDefault && !state.isSaving,
+                                                    modifier = Modifier.testTag("collectionCheckbox:${c.id}").semantics { if (c.isDefault) disabled() })
                                                 ReorderHandle(reorder, c.id, c.name, !state.isSaving, commitOrder)
                                             }
                                         }) else null) {
                                         if (!state.isSaving) {
-                                            if (selectingCollections) onEvent(GalleryEvent.ToggleEntitySelection(c.id))
+                                            if (selectingCollections && !c.isDefault) onEvent(GalleryEvent.ToggleEntitySelection(c.id))
                                             else { rememberPosition(); onEvent(GalleryEvent.OpenCollection(c.id, c.artistId)) }
                                         }
                                     }

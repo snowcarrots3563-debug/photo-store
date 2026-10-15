@@ -83,4 +83,44 @@ class BackupManifestCodecTest {
         json.getJSONObject("settings").put("collectionMediaSorts", "not-a-map")
         assertThrows(IOException::class.java) { BackupManifestCodec.decode(json.toString().toByteArray()) }
     }
+    @Test fun renamedEmptyDefaultRoundTripsInVersionOne() {
+        val m = fixture()
+        val expected = m.copy(assets = emptyList(), references = emptyList(),
+            artists = m.artists.map { it.copy(coverAssetId = null) },
+            collections = m.collections.map { it.copy(name = "常用收藏", isDefault = true) })
+        assertEquals(expected, BackupManifestCodec.decode(BackupManifestCodec.encode(expected)))
+    }
+
+    @Test fun oldBackupNamedDefaultWithoutFlagStaysOrdinary() {
+        val m = fixture().let { it.copy(collections = it.collections.map { c -> c.copy(name = "默认图集") }) }
+        val json = JSONObject(BackupManifestCodec.encode(m).toString(Charsets.UTF_8))
+        json.getJSONArray("collections").getJSONObject(0).remove("isDefault")
+        assertEquals(m, BackupManifestCodec.decode(json.toString().toByteArray()))
+    }
+
+    @Test fun videoAutoPlayRoundTripsBothValuesWithoutChangingVersionOrOtherSettings() {
+        listOf(false, true).forEach { enabled ->
+            val m = fixture().let { it.copy(settings = it.settings.copy(autoPlayVideos = enabled)) }
+            val encoded = BackupManifestCodec.encode(m)
+            val json = JSONObject(encoded.toString(Charsets.UTF_8))
+            assertEquals(1, json.getInt("version"))
+            assertEquals(enabled, json.getJSONObject("settings").getBoolean("autoPlayVideos"))
+            assertEquals(m, BackupManifestCodec.decode(encoded))
+        }
+    }
+
+    @Test fun oldVersionOneWithoutVideoAutoPlayDefaultsToEnabled() {
+        val m = fixture()
+        val json = JSONObject(BackupManifestCodec.encode(m).toString(Charsets.UTF_8))
+        json.getJSONObject("settings").remove("autoPlayVideos")
+        assertEquals(m.copy(settings = m.settings.copy(autoPlayVideos = true)), BackupManifestCodec.decode(json.toString().toByteArray()))
+    }
+
+    @Test fun presentInvalidVideoAutoPlayValueIsRejected() {
+        val json = JSONObject(BackupManifestCodec.encode(fixture()).toString(Charsets.UTF_8))
+        listOf(JSONObject.NULL, 12, "invalid").forEach { value ->
+            json.getJSONObject("settings").put("autoPlayVideos", value)
+            assertThrows(IOException::class.java) { BackupManifestCodec.decode(json.toString().toByteArray()) }
+        }
+    }
 }

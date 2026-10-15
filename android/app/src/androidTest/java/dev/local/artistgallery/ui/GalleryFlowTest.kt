@@ -67,7 +67,7 @@ class GalleryFlowTest {
         compose.onNodeWithText("创建作品集").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("未命名作品集 1").fetchSemanticsNodes().isNotEmpty() }
         val artist = runBlocking { repository.observeArtists().first().single() }
-        val original = runBlocking { repository.observeArtist(artist.id).first()!!.collections.single() }
+        val original = runBlocking { repository.observeArtist(artist.id).first()!!.collections.single { !it.isDefault } }
         compose.onNodeWithContentDescription("更多操作").performClick()
         compose.onNodeWithText("作品集改名").performClick()
         compose.onNodeWithTag("nameInput").performTextReplacement("")
@@ -77,7 +77,7 @@ class GalleryFlowTest {
         assertEquals(original.id, renamed.id)
         assertEquals(artist.id, renamed.artistId)
         assertEquals(0, renamed.imageCount)
-        assertEquals(1, runBlocking { repository.observeArtists().first().single().collectionCount })
+        assertEquals(2, runBlocking { repository.observeArtists().first().single().collectionCount })
     }
     @Test fun fixtureCountsComeFromReferencesAndNeverTouchRealDatabase() = runBlocking {
         val fixture = FixtureGalleryRepository()

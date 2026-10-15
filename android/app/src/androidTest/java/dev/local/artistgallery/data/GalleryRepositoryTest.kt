@@ -61,7 +61,7 @@ class GalleryRepositoryTest {
         assertEquals("<>&/\\ 中文  A", renamed.name)
         val before = repository.observeArtists().first()
         assertEquals(2, before.size)
-        assertTrue(before.all { it.collectionCount == 1 && it.imageCount == 0 })
+        assertTrue(before.all { it.collectionCount == 2 && it.imageCount == 0 })
         assertEquals(0, repository.observeCollection(collection).first()!!.videoCount)
         database.close()
         open()
@@ -94,14 +94,14 @@ class GalleryRepositoryTest {
             (if (index % 2 == 0) repository else otherRepository).createCollection(artist, "")
         } }.awaitAll()
         assertEquals(12, results.map { savedId(it) }.toSet().size)
-        val names = repository.observeArtist(artist).first()!!.collections.map { it.name }.toSet()
+        val names = repository.observeArtist(artist).first()!!.collections.filterNot { it.isDefault }.map { it.name }.toSet()
         assertEquals((1..12).map { "未命名作品集 $it" }.toSet(), names)
         val duplicates = (1..8).map { async(Dispatchers.IO) {
             repository.createCollection(artist, "同一名称")
         } }.awaitAll()
         assertEquals(1, duplicates.count { it is SaveResult.Saved })
         assertEquals(7, duplicates.count { it == SaveResult.DuplicateCollectionName })
-        assertEquals(13, repository.observeArtist(artist).first()!!.artist.collectionCount)
+        assertEquals(14, repository.observeArtist(artist).first()!!.artist.collectionCount)
     }
 
     @Test fun missingParentsAndMissingCollectionsDoNotWrite() = runBlocking {

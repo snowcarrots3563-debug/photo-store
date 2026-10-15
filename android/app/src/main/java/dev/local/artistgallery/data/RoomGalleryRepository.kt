@@ -42,7 +42,22 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         dao.insertArtist(ArtistEntity(id, normalized, now, now))
+        defaultCollection(id, now)
         SaveResult.Saved(id)
+    }
+
+    override suspend fun ensureDefaultCollection(artistId: String): SaveResult = save {
+        if (dao.getArtist(artistId) == null) return@save SaveResult.NotFound
+        SaveResult.Saved(defaultCollection(artistId, System.currentTimeMillis()).id)
+    }
+
+    private suspend fun defaultCollection(artistId: String, now: Long): CollectionEntity {
+        val collections = dao.getCollections(artistId)
+        collections.firstOrNull { it.isDefault }?.let { return it }
+        val name = NameRules.nextDefaultName(collections.map { it.name })
+        val collection = CollectionEntity(UUID.randomUUID().toString(), artistId, name, false, now, now, isDefault = true)
+        dao.insertCollection(collection)
+        return collection
     }
 
     override suspend fun renameArtist(id: String, name: String): SaveResult = save {
@@ -105,11 +120,17 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
     }
 
     override suspend fun getCollectionAssets(collectionId: String): List<MediaAssetEntity> =
-        withContext(Dispatchers.IO) { dao.getCollectionAssets(collectionId) }
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                if (dao.getCollection(collectionId)?.isDefault == true) throw IOException("默认图集不能单独删除。")
+                dao.getCollectionAssets(collectionId)
+            }
+        }
 
     override suspend fun deleteCollectionIfEmpty(collectionId: String): Boolean = withContext(Dispatchers.IO) {
         database.withTransaction {
-            if (dao.getCollection(collectionId) == null || dao.collectionHasMedia(collectionId)) return@withTransaction false
+            val collection = dao.getCollection(collectionId) ?: return@withTransaction false
+            if (collection.isDefault || dao.collectionHasMedia(collectionId)) return@withTransaction false
             dao.deleteCollection(collectionId) == 1
         }
     }
@@ -200,10 +221,14 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
         database.withTransaction {
             val latest = dao.getImportItem(item.batchId, item.id) ?: throw IOException("导入条目不存在。")
             if (latest.status in setOf("COMPLETE", "REUSED", "SKIPPED")) return@withTransaction
-            val group = dao.archiveGroup(requireNotNull(item.archiveGroupId)) ?: throw IOException("导入分组不存在。")
-            if (group.batchId != item.batchId) throw IOException("条目与导入分组不匹配。")
+            val group = dao.archiveGroup(requireNotNull(latest.archiveGroupId)) ?: throw IOException("导入分组不存在。")
+            if (group.batchId != latest.batchId) throw IOException("条目与导入分组不匹配。")
             if (dao.getArtist(group.artistId) == null) throw IOException("目标画师不存在。")
-            if (!dao.collectionExists(group.id)) {
+            val target = latest.targetCollectionId ?: group.id
+            val collection = dao.getCollection(target)
+            if (latest.targetCollectionId != null && collection == null) throw IOException("目标作品集不存在。")
+            if (collection != null && collection.artistId != group.artistId) throw IOException("目标作品集不属于此画师。")
+            if (collection == null) {
                 // Resolve any name taken after preview, in the same transaction as the first reference.
                 val names = dao.getCollections(group.artistId).map { it.name }.toSet()
                 var name = group.name
@@ -215,9 +240,9 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
             if (reused) {
                 if (dao.getAsset(asset.id)?.state != ASSET_READY) throw IOException("图库原图不可用。")
             } else if (dao.getAsset(asset.id) == null) dao.insertAsset(asset)
-            val linked = dao.referenceExists(group.id, asset.id)
-            if (!linked) dao.insertCollectionMedia(CollectionMediaEntity(group.id, asset.id, dao.nextManualOrder(group.id), item.sourceName, item.sourceRelativePath))
-            dao.updateImportItem(item.copy(targetCollectionId = group.id, status = if (linked) "SKIPPED" else if (reused) "REUSED" else "COMPLETE", errorMessage = if (linked) "同一作品集已有相同内容。" else null, updatedAt = System.currentTimeMillis()))
+            val linked = dao.referenceExists(target, asset.id)
+            if (!linked) dao.insertCollectionMedia(CollectionMediaEntity(target, asset.id, dao.nextManualOrder(target), latest.sourceName, latest.sourceRelativePath))
+            dao.updateImportItem(latest.copy(targetCollectionId = target, status = if (linked) "SKIPPED" else if (reused) "REUSED" else "COMPLETE", errorMessage = if (linked) "同一作品集已有相同内容。" else null, updatedAt = System.currentTimeMillis()))
         }
     }
 
@@ -315,7 +340,7 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
 
     private fun CollectionWithMediaCounts.summary() = CollectionSummary(
         collection.id, collection.artistId, collection.name, collection.isTemporary, imageCount, videoCount,
-        coverStorageKey?.let(CoverRef::Asset) ?: CoverRef.None,
+        coverStorageKey?.let(CoverRef::Asset) ?: CoverRef.None, collection.isDefault,
     )
 
     private fun MediaAssetRow.summary() = MediaAssetSummary(

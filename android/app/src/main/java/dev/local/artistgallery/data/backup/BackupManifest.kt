@@ -61,7 +61,11 @@ object BackupValidation {
         }
         runCatching { manifest.totalBytes }.getOrElse { throw IOException("备份大小无效。") }
         manifest.artists.forEach { name(it.name); requireBackup(it.coverAssetId == null || it.coverAssetId in assetIds, "备份封面引用无效。") }
-        manifest.collections.forEach { name(it.name); requireBackup(it.artistId in artistIds, "备份作品集归属无效。") }
+        val defaultArtists = HashSet<String>()
+        manifest.collections.forEach {
+            name(it.name); requireBackup(it.artistId in artistIds, "备份作品集归属无效。")
+            requireBackup(!it.isDefault || defaultArtists.add(it.artistId), "同一画师不能有多个默认图集。")
+        }
         val pairs = HashSet<Pair<String, String>>()
         manifest.references.forEach {
             name(it.sourceName)

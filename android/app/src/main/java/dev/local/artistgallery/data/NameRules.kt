@@ -10,6 +10,14 @@ object NameRules {
         return "未命名作品集 $number"
     }
 
+    fun nextDefaultName(existingNames: Collection<String>): String {
+        val used = existingNames.toHashSet()
+        var name = "默认图集"
+        var number = 2
+        while (name in used) name = "默认图集（${number++}）"
+        return name
+    }
+
     fun isDuplicate(name: String, existingNames: Collection<String>): Boolean =
         normalize(name) in existingNames
 }

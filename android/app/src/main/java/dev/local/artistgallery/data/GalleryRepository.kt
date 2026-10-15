@@ -8,6 +8,7 @@ interface GalleryRepository {
     fun observeArtist(id: String): Flow<ArtistDetail?>
     fun observeCollection(id: String): Flow<CollectionSummary?>
     suspend fun createArtist(name: String): SaveResult
+    suspend fun ensureDefaultCollection(artistId: String): SaveResult = SaveResult.StorageFailure
     suspend fun renameArtist(id: String, name: String): SaveResult
     suspend fun createCollection(artistId: String, name: String): SaveResult
     suspend fun renameCollection(id: String, name: String): SaveResult

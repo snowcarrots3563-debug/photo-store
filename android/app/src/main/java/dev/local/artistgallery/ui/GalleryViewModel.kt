@@ -52,18 +52,22 @@ class GalleryViewModel(
     private var galleryQueriesPaused = false
     private var resumeArtistsAfterPause = false
     private var importJob: Job? = null
+    private var importPreviewJob: Job? = null
     private var importResultJob: Job? = null
     private var pendingImportResultId: String? = null
-    private var importPreviewId: String? = null
+    private var importPreviewId: String? = if (state.value.dialog == GalleryDialog.ImportPreview && state.value.importCandidates.isNotEmpty()) UUID.randomUUID().toString() else null
     private var coverJob: Job? = null
     private data class ArtistReturnState(val id: String, val detail: ArtistDetail, val images: List<MediaAssetSummary>, val tab: ArtistTab)
     private var parentArtist: ArtistReturnState? = null
 
     init {
+        savedState.remove<String>("importPreviewId")
         observeArtists()
         observeRoute()
         observeImportHistory()
         (state.value.dialog as? GalleryDialog.ArtistCover)?.let { loadCoverImages(it.artistId) }
+        ((state.value.dialog as? GalleryDialog.ImportTarget)?.artistId
+            ?: state.value.pendingImportDefaultArtistId?.takeIf { state.value.dialog == GalleryDialog.ImportPreview })?.let { loadTargetCollections(it) }
         browsePreferences?.let { preferences -> viewModelScope.launch {
             preferences.options.collect { options -> applyBrowseOptions(options) }
         } }
@@ -75,6 +79,11 @@ class GalleryViewModel(
         savedState["query"] = s.searchQuery
         savedState["tab"] = s.artistTab.name
         savedState["pendingImportTargetCollectionId"] = s.pendingImportTargetCollectionId
+        savedState["pendingImportDefaultArtistId"] = s.pendingImportDefaultArtistId
+        savedState["pendingAddAssetIds"] = ArrayList(s.pendingAddAssetIds)
+        savedState["importCandidates"] = ArrayList(if (s.dialog == GalleryDialog.ImportPreview) s.importCandidates.map {
+            arrayListOf(it.uri, it.name, it.type?.name.orEmpty(), it.error.orEmpty(), it.skipReason.orEmpty())
+        } else emptyList())
         savedState["mediaSelectionMode"] = s.mediaSelectionMode
         savedState["selectedMediaIds"] = ArrayList(s.selectedMediaIds)
         savedState["entitySelectionKind"] = s.entitySelectionKind?.name
@@ -111,7 +120,8 @@ class GalleryViewModel(
             is GalleryDialog.Unavailable -> arrayListOf("unavailable", d.feature, d.phase.toString())
             GalleryDialog.About -> arrayListOf("about")
             GalleryDialog.UpdateHistory -> arrayListOf("updateHistory")
-            is GalleryDialog.ImportTarget -> arrayListOf("importTarget", d.artistId.orEmpty(), d.collectionId.orEmpty(), d.toUnassigned.toString(), d.fromFiles.toString())
+            is GalleryDialog.ImportTarget -> arrayListOf("importTarget", d.artistId.orEmpty(), d.collectionId.orEmpty(), d.toUnassigned.toString(), d.fromFiles.toString(), d.allowDefault.toString())
+            GalleryDialog.ImportPreview -> arrayListOf("importPreview")
             is GalleryDialog.DeleteMedia -> arrayListOf("deleteMedia", d.assetId, d.name)
             is GalleryDialog.DeleteSelectedMedia -> arrayListOf("deleteSelectedMedia").apply { addAll(d.assetIds) }
             is GalleryDialog.ArtistCover -> arrayListOf("artistCover", d.artistId, d.selectedAssetId.orEmpty())
@@ -136,9 +146,16 @@ class GalleryViewModel(
         val selectionKind = EntitySelectionKind.entries.firstOrNull { it.name == savedState.get<String>("entitySelectionKind") }
             ?.takeIf { (it == EntitySelectionKind.Artists && route == GalleryRoute.Home) ||
                 (it == EntitySelectionKind.Collections && route is GalleryRoute.Artist && tab == ArtistTab.Collections) }
+        val importCandidates = if (d[0] == "importPreview") savedState.get<ArrayList<ArrayList<String>>>("importCandidates").orEmpty().map {
+            dev.local.artistgallery.model.ImportCandidate(it[0], it[1], dev.local.artistgallery.model.MediaType.entries.firstOrNull { type -> type.name == it[2] },
+                it[3].ifEmpty { null }, it[4].ifEmpty { null })
+        } else emptyList()
         return GalleryUiState(
             searchQuery = savedState["query"] ?: "",
             pendingImportTargetCollectionId = savedState["pendingImportTargetCollectionId"],
+            pendingImportDefaultArtistId = savedState["pendingImportDefaultArtistId"],
+            pendingAddAssetIds = savedState.get<ArrayList<String>>("pendingAddAssetIds").orEmpty(),
+            importCandidates = importCandidates,
             artistTab = tab,
             route = route,
             mediaSelectionMode = selectionKind == null && (savedState["mediaSelectionMode"] ?: false),
@@ -178,7 +195,8 @@ class GalleryViewModel(
                 "unavailable" -> GalleryDialog.Unavailable(d[1], d[2].toInt())
                 "about" -> GalleryDialog.About
                 "updateHistory" -> GalleryDialog.UpdateHistory
-                "importTarget" -> GalleryDialog.ImportTarget(d.getOrNull(1)?.ifEmpty { null }, d.getOrNull(2)?.ifEmpty { null }, d.getOrNull(3) == "true", d.getOrNull(4) == "true")
+                "importTarget" -> GalleryDialog.ImportTarget(d.getOrNull(1)?.ifEmpty { null }, d.getOrNull(2)?.ifEmpty { null }, d.getOrNull(3) == "true", d.getOrNull(4) == "true", d.getOrNull(5) == "true")
+                "importPreview" -> if (importCandidates.isNotEmpty()) GalleryDialog.ImportPreview else GalleryDialog.None
                 "deleteMedia" -> GalleryDialog.DeleteMedia(d[1], d[2])
                 "deleteSelectedMedia" -> GalleryDialog.DeleteSelectedMedia(d.drop(1).distinct())
                 "artistCover" -> GalleryDialog.ArtistCover(d[1], d.getOrNull(2)?.ifEmpty { null })
@@ -260,7 +278,7 @@ class GalleryViewModel(
     private fun entityIds(current: GalleryUiState, kind: EntitySelectionKind): List<String> = when {
         kind == EntitySelectionKind.Artists && current.route == GalleryRoute.Home -> current.artists.map { it.id }
         kind == EntitySelectionKind.Collections && current.route is GalleryRoute.Artist && current.artistTab == ArtistTab.Collections ->
-            current.artistDetail?.takeIf { it.artist.id == current.route.id }?.collections.orEmpty().map { it.id }
+            current.artistDetail?.takeIf { it.artist.id == current.route.id }?.collections.orEmpty().filterNot { it.isDefault }.map { it.id }
         else -> emptyList()
     }
 
@@ -327,7 +345,7 @@ class GalleryViewModel(
                         if (state.value.route != route) return@collect
                         change { current -> current.copy(artistDetail = orderedDetail(detail),
                             selectedEntityIds = if (current.entitySelectionKind == EntitySelectionKind.Collections)
-                                current.selectedEntityIds.intersect(detail?.collections.orEmpty().mapTo(mutableSetOf()) { it.id }) else current.selectedEntityIds,
+                                current.selectedEntityIds.intersect(detail?.collections.orEmpty().filterNot { it.isDefault }.mapTo(mutableSetOf()) { it.id }) else current.selectedEntityIds,
                             loadState = if (detail == null) LoadState.Failed else LoadState.Ready) }
                     }
                     is GalleryRoute.Collection -> {
@@ -393,6 +411,8 @@ class GalleryViewModel(
 
     private fun navigate(route: GalleryRoute, tab: ArtistTab = state.value.artistTab, returningToArtist: Boolean = false) {
         importResultJob?.cancel()
+        importPreviewJob?.cancel()
+        importPreviewId = null
         coverJob?.cancel()
         val current = state.value
         val parent = if (returningToArtist && route is GalleryRoute.Artist && current.route is GalleryRoute.Collection &&
@@ -413,7 +433,9 @@ class GalleryViewModel(
             artistDetail = parent?.let { cached -> current.artistDetail?.takeIf { it.artist.id == cached.id } ?: cached.detail }, collection = null,
             mediaItems = parent?.images ?: emptyList(), selectedMediaIds = emptySet(), mediaSelectionMode = false,
             entitySelectionKind = null, selectedEntityIds = emptySet(), browseOptions = displayOptions(route),
-            pendingAddAssetIds = emptyList(), importCandidates = emptyList(), importResult = null) }
+            pendingAddAssetIds = emptyList(), importCandidates = emptyList(), importResult = null,
+            pendingImportTargetCollectionId = if (importJob?.isActive == true) it.pendingImportTargetCollectionId else null,
+            pendingImportDefaultArtistId = if (importJob?.isActive == true) it.pendingImportDefaultArtistId else null) }
         observeRoute()
     }
 
@@ -459,7 +481,8 @@ class GalleryViewModel(
             GalleryEvent.ClearSearch -> change { it.copy(searchQuery = "") }
             is GalleryEvent.OpenArtist -> if (state.value.entitySelectionKind == EntitySelectionKind.Artists)
                 onEvent(GalleryEvent.ToggleEntitySelection(event.id)) else navigate(GalleryRoute.Artist(event.id), ArtistTab.Images)
-            is GalleryEvent.OpenCollection -> if (state.value.entitySelectionKind == EntitySelectionKind.Collections)
+            is GalleryEvent.OpenCollection -> if (state.value.entitySelectionKind == EntitySelectionKind.Collections &&
+                state.value.artistDetail?.collections?.firstOrNull { it.id == event.id }?.isDefault != true)
                 onEvent(GalleryEvent.ToggleEntitySelection(event.id)) else navigate(GalleryRoute.Collection(event.id, event.artistId))
             is GalleryEvent.OpenMedia -> openMedia(event.assetId)
             GalleryEvent.CloseOverlay -> change { it.copy(overlay = GalleryOverlay.None) }
@@ -475,8 +498,17 @@ class GalleryViewModel(
                 GalleryDialog.ArtistImageSort -> canSortArtistImages(state.value)
                 GalleryDialog.CollectionMediaSort -> canSortCollectionMedia(state.value)
                 else -> true
-            })
-                change { it.copy(dialog = event.dialog, fieldError = null) }
+            }) {
+                val newImportTarget = (event.dialog is GalleryDialog.ImportTarget || event.dialog == GalleryDialog.AddMenu) && importJob?.isActive != true
+                if (newImportTarget) {
+                    importPreviewJob?.cancel()
+                    importPreviewId = null
+                }
+                change { it.copy(dialog = event.dialog, fieldError = null,
+                    importCandidates = if (newImportTarget) emptyList() else it.importCandidates,
+                    pendingImportTargetCollectionId = if (newImportTarget) null else it.pendingImportTargetCollectionId,
+                    pendingImportDefaultArtistId = if (newImportTarget) null else it.pendingImportDefaultArtistId) }
+            }
             is GalleryEvent.DraftChanged -> change { s -> s.copy(dialog = when (val d = s.dialog) {
                 is GalleryDialog.AddArtist -> d.copy(draft = event.draft)
                 is GalleryDialog.CreateCollection -> d.copy(draft = event.draft)
@@ -488,8 +520,16 @@ class GalleryViewModel(
             GalleryEvent.DismissDialog -> {
                 val resumeArchive = (state.value.dialog as? GalleryDialog.AddArtist)?.fromArchiveImport == true
                 coverJob?.cancel()
+                val cancelImport = state.value.dialog is GalleryDialog.ImportTarget || state.value.dialog == GalleryDialog.ImportPreview
+                if (cancelImport) {
+                    importPreviewJob?.cancel()
+                    importPreviewId = null
+                }
                 change { current ->
-                    current.copy(dialog = GalleryDialog.None, fieldError = null, coverItems = emptyList(), pendingAddAssetIds = if (current.dialog is GalleryDialog.ImportTarget) emptyList() else current.pendingAddAssetIds)
+                    current.copy(dialog = GalleryDialog.None, fieldError = null, coverItems = emptyList(), pendingAddAssetIds = if (current.dialog is GalleryDialog.ImportTarget) emptyList() else current.pendingAddAssetIds,
+                        importCandidates = if (cancelImport) emptyList() else current.importCandidates,
+                        pendingImportTargetCollectionId = if (cancelImport) null else current.pendingImportTargetCollectionId,
+                        pendingImportDefaultArtistId = if (cancelImport) null else current.pendingImportDefaultArtistId)
                 }
                 if (resumeArchive) mutableEffects.tryEmit(GalleryEffect.ResumeArchiveArtistSelection)
             }
@@ -617,23 +657,34 @@ class GalleryViewModel(
             is GalleryEvent.SetCardEffects -> saveBrowseOptions(persistedBrowseOptions.copy(cardEffects = event.enabled))
             is GalleryEvent.SetPlayGifs -> saveBrowseOptions(persistedBrowseOptions.copy(playGifs = event.enabled))
             is GalleryEvent.SetSwipeDelete -> saveBrowseOptions(persistedBrowseOptions.copy(swipeDelete = event.enabled))
+            is GalleryEvent.SetAutoPlayVideos -> saveBrowseOptions(persistedBrowseOptions.copy(autoPlayVideos = event.enabled))
         }
     }
 
     fun onMediaPicked(uris: List<Uri>) {
         importResultJob?.cancel()
+        importPreviewJob?.cancel()
+        importPreviewId = null
         if (uris.isEmpty()) {
-            change { it.copy(pendingImportTargetCollectionId = null) }
+            change { it.copy(pendingImportTargetCollectionId = null, pendingImportDefaultArtistId = null, importCandidates = emptyList(),
+                dialog = if (it.dialog == GalleryDialog.ImportPreview) GalleryDialog.None else it.dialog) }
             return
         }
         val importer = mediaImporter ?: return
-        viewModelScope.launch {
+        importPreviewJob = viewModelScope.launch {
             try {
                 val candidates = importer.previewUris(uris)
+                currentCoroutineContext().ensureActive()
                 importPreviewId = UUID.randomUUID().toString()
                 change { it.copy(importCandidates = candidates, importProgress = null, importResult = null, dialog = GalleryDialog.ImportPreview, fieldError = null) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { change { it.copy(dialog = GalleryDialog.None, fieldError = error.message ?: "读取选择结果失败。") } }
+            catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                val message = error.message ?: "读取选择结果失败。"
+                change { it.copy(dialog = GalleryDialog.None, importCandidates = emptyList(), pendingImportTargetCollectionId = null,
+                    pendingImportDefaultArtistId = null, fieldError = message) }
+                messages.emit(GalleryFeedback.Saved(message))
+            }
         }
     }
 
@@ -653,10 +704,16 @@ class GalleryViewModel(
             else -> null
         }
         val selectedCollection = collectionId ?: (route as? GalleryRoute.Collection)?.id
+        importPreviewJob?.cancel()
+        importPreviewId = null
         change {
             it.copy(
-                dialog = GalleryDialog.ImportTarget(selectedArtist, selectedCollection, toUnassigned, fromFiles),
+                dialog = GalleryDialog.ImportTarget(selectedArtist, selectedCollection, toUnassigned, fromFiles,
+                    allowDefault = route is GalleryRoute.Artist && route.id == selectedArtist),
                 importTargetCollections = emptyList(),
+                importCandidates = emptyList(),
+                pendingImportTargetCollectionId = null,
+                pendingImportDefaultArtistId = null,
                 fieldError = null,
             )
         }
@@ -725,7 +782,8 @@ class GalleryViewModel(
     private fun selectImportArtist(artistId: String) {
         change { current ->
             val target = current.dialog as? GalleryDialog.ImportTarget ?: return@change current
-            current.copy(dialog = target.copy(artistId = artistId, collectionId = null, toUnassigned = false), importTargetCollections = emptyList(), fieldError = null)
+            current.copy(dialog = target.copy(artistId = artistId, collectionId = null, toUnassigned = false,
+                allowDefault = current.route is GalleryRoute.Artist && current.route.id == artistId), importTargetCollections = emptyList(), fieldError = null)
         }
         loadTargetCollections(artistId)
     }
@@ -735,7 +793,8 @@ class GalleryViewModel(
             val collections = orderedDetail(repository.observeArtist(artistId).first())?.collections.orEmpty()
             change { current ->
                 val target = current.dialog as? GalleryDialog.ImportTarget
-                if (target?.artistId == artistId) current.copy(importTargetCollections = collections) else current
+                if (target?.artistId == artistId || (current.dialog == GalleryDialog.ImportPreview && current.pendingImportDefaultArtistId == artistId))
+                    current.copy(importTargetCollections = collections) else current
             }
         }
     }
@@ -767,12 +826,14 @@ class GalleryViewModel(
             }
             return
         }
-        if (!target.toUnassigned && target.collectionId == null) {
+        val defaultArtistId = target.artistId?.takeIf { !target.toUnassigned && target.collectionId == null &&
+            (target.allowDefault || state.value.importTargetCollections.any { collection -> collection.isDefault }) }
+        if (!target.toUnassigned && target.collectionId == null && defaultArtistId == null) {
             change { it.copy(fieldError = "请选择作品集，或选择导入到未归组媒体。") }
             return
         }
         val collectionId = if (target.toUnassigned) null else target.collectionId
-        change { it.copy(dialog = GalleryDialog.None, pendingImportTargetCollectionId = collectionId, fieldError = null) }
+        change { it.copy(dialog = GalleryDialog.None, pendingImportTargetCollectionId = collectionId, pendingImportDefaultArtistId = defaultArtistId, fieldError = null) }
         mutableEffects.tryEmit(GalleryEffect.LaunchMediaPicker(collectionId, target.fromFiles))
     }
 
@@ -782,22 +843,31 @@ class GalleryViewModel(
         val candidates = state.value.importCandidates
         if (candidates.isEmpty()) return
         val targetCollectionId = state.value.pendingImportTargetCollectionId
+        val defaultArtistId = state.value.pendingImportDefaultArtistId
         importPreviewId = null
         importResultJob?.cancel()
         change { it.copy(dialog = GalleryDialog.ImportProgress, importProgress = null, importResult = null) }
         importJob = viewModelScope.launch {
             try {
-                val result = importer.importUris(candidates.map { Uri.parse(it.uri) }, targetCollectionId) { progress ->
+                val actualTargetId = if (defaultArtistId == null) targetCollectionId else when (val result = repository.ensureDefaultCollection(defaultArtistId)) {
+                    is SaveResult.Saved -> result.id
+                    SaveResult.NotFound -> throw IllegalStateException("画师不存在，请重新选择导入位置。")
+                    else -> throw IllegalStateException("无法准备默认图集，请稍后重试。")
+                }
+                currentCoroutineContext().ensureActive()
+                val result = importer.importUris(candidates.map { Uri.parse(it.uri) }, actualTargetId) { progress ->
                     changeTransient { it.copy(importProgress = progress) }
                 }
                 notifyImportCompleted(result)
                 val showResult = state.value.dialog == GalleryDialog.ImportProgress
-                change { it.copy(dialog = if (showResult) GalleryDialog.ImportResult(result.id) else GalleryDialog.None, importResult = result, importProgress = null, importCandidates = emptyList(), pendingImportTargetCollectionId = null) }
+                change { it.copy(dialog = if (showResult) GalleryDialog.ImportResult(result.id) else GalleryDialog.None, importResult = result, importProgress = null, importCandidates = emptyList(), pendingImportTargetCollectionId = null, pendingImportDefaultArtistId = null) }
                 if (!showResult) messages.emit(GalleryFeedback.Saved(importSummaryText(result)))
                 observeRoute()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                change { it.copy(dialog = GalleryDialog.None, importCandidates = emptyList(), importProgress = null, pendingImportTargetCollectionId = null, fieldError = error.message ?: "导入失败。") }
+                val message = error.message ?: "导入失败。"
+                change { it.copy(dialog = GalleryDialog.None, importCandidates = emptyList(), importProgress = null, pendingImportTargetCollectionId = null, pendingImportDefaultArtistId = null, fieldError = message) }
+                messages.emit(GalleryFeedback.Saved(message))
             }
             finally { finishImportAttempt() }
         }

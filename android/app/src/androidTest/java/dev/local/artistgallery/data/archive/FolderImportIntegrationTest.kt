@@ -246,6 +246,52 @@ class FolderImportIntegrationTest {
     @Test fun confirmedFolderResumesFromSnapshotAndNumbersExistingCollection() = runBlocking { resumeFixture(tamper = false) }
     @Test fun snapshotTamperingCannotCommitAnAssetAndRestoredSnapshotCanRetry() = runBlocking { resumeFixture(tamper = true) }
 
+    @Test fun newFolderRootUsesDefaultOnlyAfterConfirmationAndKeepsSubdirectoryTarget() = runBlocking {
+        provider.file("root:image", "root.png", "root:id", png())
+        provider.file("root:txt", "notes.txt", "root:id", "fixture".toByteArray())
+        provider.directory("series:id", "系列", "root:id")
+        provider.file("series:image", "child.png", "series:id", png())
+        withTask { db, repo, files, importer, scope ->
+            val artist = UUID.randomUUID().toString()
+            db.galleryDao().insertArtist(ArtistEntity(artist, "合成旧画师", 1, 1))
+            val controller = ArchiveImportCoordinator(context, db, repo, importer, files, scope)
+            var task: String? = null
+            try {
+                controller.recover(); controller.openFolder(artist); controller.pickFolder(tree)
+                val preview = await(controller, ArchiveStep.Preview, scope)
+                task = preview.taskId
+                assertEquals("默认图集", preview.groups.single { it.relativeDirectory.isEmpty() }.name)
+                assertTrue(db.galleryDao().getCollections(artist).isEmpty())
+                assertTrue(db.galleryDao().archiveTasks().isEmpty())
+                controller.cancel(); withTimeout(15_000) { controller.state.first { !it.visible } }
+                assertTrue(db.galleryDao().getCollections(artist).isEmpty())
+                controller.openFolder(artist); controller.pickFolder(tree)
+                task = await(controller, ArchiveStep.Preview, scope).taskId
+                controller.confirm()
+                val result = await(controller, ArchiveStep.Result, scope)
+                val groups = db.galleryDao().archiveGroups(requireNotNull(task))
+                val rootGroup = groups.single { it.relativeDirectory.isEmpty() }
+                val default = db.galleryDao().getCollections(artist).single { it.isDefault }
+                assertNotEquals(default.id, rootGroup.id)
+                assertTrue(result.items.filter { it.archiveGroupId == rootGroup.id }.all { it.targetCollectionId == default.id })
+                assertEquals("SKIPPED", result.items.single { it.sourceName == "notes.txt" }.status)
+                val child = result.items.single { it.sourceName == "child.png" }
+                assertEquals(child.archiveGroupId, child.targetCollectionId)
+                assertFalse(db.galleryDao().getCollection(requireNotNull(child.targetCollectionId))!!.isDefault)
+                assertEquals(listOf("默认图集", "系列"), result.collectionNames)
+                assertEquals(2, db.galleryDao().allReferences().size)
+            } finally {
+                task?.let { id ->
+                    repo.importItems(id).forEach { files.deleteStaging(it.stagingKey); files.deleteOriginal(it.storageKey) }
+                    val taskRoot = File(requireNotNull(context.getExternalFilesDir(null)), ".archive-imports").canonicalFile
+                    val taskFolder = File(taskRoot, id).canonicalFile
+                    assertEquals(taskRoot, taskFolder.parentFile)
+                    taskFolder.deleteRecursively()
+                }
+            }
+        }
+    }
+
     private suspend fun resumeFixture(tamper: Boolean) {
         val bytes = png()
         val source = provider.file("image:id", "a.png", "root:id", bytes)

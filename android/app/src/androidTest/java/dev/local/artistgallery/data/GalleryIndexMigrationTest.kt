@@ -54,11 +54,11 @@ class GalleryIndexMigrationTest {
         }
     }
 
-    @Test fun freshV5DatabaseHasCoveringOrderIndex() = runBlocking {
+    @Test fun freshDatabaseKeepsV5CoveringOrderIndex() = runBlocking {
         val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
         try {
             assertEquals(0, db.galleryDao().nextManualOrder("empty"))
-            assertEquals(5, db.openHelper.writableDatabase.version)
+            assertEquals(6, db.openHelper.writableDatabase.version)
             assertOrderIndex(db.openHelper.writableDatabase)
         } finally { db.close() }
     }

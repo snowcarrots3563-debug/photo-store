@@ -26,4 +26,19 @@ class NameRulesTest {
     @Test fun blankRenameIncludesCurrentNameWhenChoosingNumber() {
         assertEquals("未命名作品集 3", NameRules.nextTemporaryName(listOf("未命名作品集 1", "未命名作品集 2")))
     }
+
+    @Test fun defaultNameStartsWithTheExactChineseBase() {
+        assertEquals("默认图集", NameRules.nextDefaultName(emptyList()))
+        assertEquals("默认图集（2）", NameRules.nextDefaultName(listOf("默认图集")))
+    }
+
+    @Test fun defaultNameUsesTheFirstAvailableChineseSuffix() {
+        assertEquals("默认图集（3）", NameRules.nextDefaultName(listOf("默认图集", "默认图集（2）", "默认图集（4）")))
+        assertEquals("默认图集", NameRules.nextDefaultName(listOf("默认图集（2）")))
+    }
+
+    @Test fun defaultNameDoesNotTreatSimilarSpellingsAsCollisions() {
+        assertEquals("默认图集", NameRules.nextDefaultName(listOf(" 默认图集 ", "默认图集 (2)", "默认图集（02）")))
+        assertEquals("默认图集（2）", NameRules.nextDefaultName(listOf("默认图集", "默认图集 (2)", "默认图集（02）")))
+    }
 }

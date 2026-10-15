@@ -197,7 +197,7 @@ class RealZipDeviceTest {
                     if (results.length() % 10 == 0) println("phase4 real archive checked=${results.length()}/144 elapsedMs=${SystemClock.elapsedRealtime() - started}")
                 }
                 val artist = requireNotNull(repository.observeArtist(artistId).first())
-                assertEquals(summary.getInt("importableGroups"), artist.collections.size)
+                assertEquals(summary.getInt("importableGroups") + 1, artist.collections.size)
                 groups.filter { it.canImport }.forEach { group ->
                     val media = repository.observeCollectionMedia(collections.getValue(group.relativeDirectory)).first()
                     assertEquals(group.items.count { it.mediaType != null }, media.size)
@@ -206,7 +206,7 @@ class RealZipDeviceTest {
                 assertEquals(summary.getInt("skippedFiles"), skipped)
                 assertEquals(summary.getInt("files"), results.length())
                 report.put("status", "PASSED").put("entries", entries.size).put("checkedFiles", results.length())
-                    .put("previewGroups", groups.size).put("createdCollections", artist.collections.size)
+                    .put("previewGroups", groups.size).put("createdCollections", collections.size).put("artistDefaultCollections", artist.collections.count { it.isDefault })
                     .put("newAssets", imported).put("reusedAssets", reused).put("skippedFiles", skipped)
                     .put("elapsedMs", SystemClock.elapsedRealtime() - started).put("items", results)
                 assertEquals(summary.getString("archiveSha256"), hash(file))

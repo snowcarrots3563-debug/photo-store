@@ -15,8 +15,10 @@ import dev.local.artistgallery.data.CollectionEntity
 import dev.local.artistgallery.data.CollectionMediaEntity
 import dev.local.artistgallery.data.GalleryDatabase
 import dev.local.artistgallery.data.MediaAssetEntity
+import dev.local.artistgallery.data.RoomGalleryRepository
 import dev.local.artistgallery.data.importing.MediaFileStore
 import dev.local.artistgallery.model.MediaSort
+import dev.local.artistgallery.model.SaveResult
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -31,6 +33,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
+import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -284,6 +287,51 @@ class BackupRestorerTest {
         }
     }
 
+    @Test fun renamedEmptyDefaultRestoresOnceByNewIdAndKeepsLocalAutoPlayDisabled() = runBlocking {
+        fixture { f ->
+            f.preferences.save(BrowseOptions(autoPlayVideos = false))
+            val source = f.backup(includeDefault = true)
+            val manifest = BackupArchiveReader(source).use { BackupManifestCodec.decode(it.manifestBytes {}) }
+            val original = manifest.collections.single { it.isDefault }
+            assertTrue(manifest.settings.autoPlayVideos)
+            val result = f.restorer.confirm(f.restorer.prepare(Uri.fromFile(source), {}))
+            assertEquals(RestoreOutcome(1, 3, 2, 3), result)
+            val dao = f.database.galleryDao()
+            val restored = dao.allCollections().single { it.isDefault }
+            assertNotEquals(original.id, restored.id)
+            assertNotEquals(original.artistId, restored.artistId)
+            assertEquals(original.name, restored.name)
+            assertTrue(dao.getCollectionAssets(restored.id).isEmpty())
+            assertFalse(f.preferences.options.value.autoPlayVideos)
+            val repository = RoomGalleryRepository(f.database)
+            assertEquals(SaveResult.Saved(restored.id), repository.ensureDefaultCollection(restored.artistId))
+            assertEquals(3, dao.allCollections().size)
+        }
+    }
+
+    @Test fun legacyBackupKeepsSameNamedOrdinaryGroupAndCreatesDefaultOnlyWhenRequested() = runBlocking {
+        fixture { f ->
+            f.preferences.save(BrowseOptions(autoPlayVideos = false))
+            val source = f.backup(legacy = true)
+            val manifest = BackupArchiveReader(source).use { BackupManifestCodec.decode(it.manifestBytes {}) }
+            assertTrue(manifest.collections.none { it.isDefault })
+            assertTrue(manifest.settings.autoPlayVideos)
+            f.restorer.confirm(f.restorer.prepare(Uri.fromFile(source), {}))
+            val dao = f.database.galleryDao()
+            val ordinary = dao.allCollections().single { it.name == "默认图集" }
+            assertFalse(ordinary.isDefault)
+            assertEquals(2, dao.allCollections().size)
+            assertTrue(dao.allCollections().none { it.isDefault })
+            assertFalse(f.preferences.options.value.autoPlayVideos)
+            val saved = RoomGalleryRepository(f.database).ensureDefaultCollection(ordinary.artistId) as SaveResult.Saved
+            val default = requireNotNull(dao.getCollection(saved.id))
+            assertTrue(default.isDefault)
+            assertEquals("默认图集（2）", default.name)
+            assertEquals(ordinary, dao.getCollection(ordinary.id))
+            assertEquals(3, dao.allCollections().size)
+        }
+    }
+
     @Test fun backupWithoutCollectionChoicesCreatesExplicitManualDefaultForRestoredCollections() = runBlocking {
         fixture { f ->
             val prepared = f.restorer.prepare(Uri.fromFile(f.backup()), {})
@@ -406,14 +454,16 @@ class BackupRestorerTest {
             return asset
         }
 
-        fun backup(wrongHash: Boolean = false, media: ByteArray = png(), sort: MediaSort? = null, collectionSort: MediaSort? = null): File {
+        fun backup(wrongHash: Boolean = false, media: ByteArray = png(), sort: MediaSort? = null, collectionSort: MediaSort? = null,
+                   includeDefault: Boolean = false, legacy: Boolean = false): File {
             val assetA = BackupAsset(uuid(), "第1页.png", "IMAGE", media.size.toLong(), 2, 2, if (wrongHash) "0".repeat(64) else sha(media), 25)
             val assetB = assetA.copy(id = uuid(), originalName = "第2页.png")
             val artist = ArtistEntity(uuid(), "画师", 17, 19, assetA.id)
             val first = CollectionEntity(uuid(), artist.id, "作品", false, 20, 21)
-            val second = first.copy(id = uuid(), createdAt = 22, updatedAt = 23)
+            val second = first.copy(id = uuid(), name = if (legacy) "默认图集" else first.name, createdAt = 22, updatedAt = 23)
+            val defaults = if (includeDefault) listOf(first.copy(id = uuid(), name = "常用入口（已改名）", isDefault = true)) else emptyList()
             val manifest = BackupManifest(createdAt = 100,
-                assets = listOf(assetA, assetB), artists = listOf(artist), collections = listOf(first, second),
+                assets = listOf(assetA, assetB), artists = listOf(artist), collections = listOf(first, second) + defaults,
                 references = listOf(
                     CollectionMediaEntity(first.id, assetA.id, 2, "封面.png", "来源/封面.png"),
                     CollectionMediaEntity(first.id, assetB.id, 7, "第2页.png", "来源/第2页.png"),
@@ -424,8 +474,14 @@ class BackupRestorerTest {
                     collectionMediaSorts = collectionSort?.let { mapOf(first.id to it) }.orEmpty()),
             )
             val source = File(context.getExternalFilesDir(null), "selected-${uuid()}.zip")
+            val encoded = BackupManifestCodec.encode(manifest)
+            val manifestBytes = if (legacy) JSONObject(encoded.toString(Charsets.UTF_8)).apply {
+                getJSONObject("settings").remove("autoPlayVideos")
+                val collections = getJSONArray("collections")
+                repeat(collections.length()) { collections.getJSONObject(it).remove("isDefault") }
+            }.toString().toByteArray(Charsets.UTF_8) else encoded
             ZipOutputStream(source.outputStream()).use { zip ->
-                zip.putNextEntry(ZipEntry(BackupValidation.MANIFEST_NAME)); zip.write(BackupManifestCodec.encode(manifest)); zip.closeEntry()
+                zip.putNextEntry(ZipEntry(BackupValidation.MANIFEST_NAME)); zip.write(manifestBytes); zip.closeEntry()
                 manifest.assets.forEach { zip.putNextEntry(ZipEntry(it.entryPath)); zip.write(media); zip.closeEntry() }
             }
             return source

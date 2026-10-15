@@ -49,4 +49,31 @@ class BrowsePreferencesPersistenceTest {
         recreated.save(disabled.copy(swipeDelete = true))
         assertEquals(disabled.copy(swipeDelete = true), LocalBrowsePreferences(isolatedContext).options.value)
     }
+
+    @Test fun oldPreferencesWithoutVideoSettingDefaultItToEnabled() {
+        val preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+        assertTrue(preferences.edit().putBoolean("playGifs", false).putBoolean("swipeDelete", false).commit())
+        assertEquals(BrowseOptions(playGifs = false, swipeDelete = false), LocalBrowsePreferences(isolatedContext).options.value)
+        assertTrue(LocalBrowsePreferences(isolatedContext).options.value.autoPlayVideos)
+        assertFalse(preferences.contains("autoPlayVideos"))
+    }
+
+    @Test fun savedVideoSettingSurvivesRecreationIndependentlyOfGifAndSwipeDelete() {
+        val preferences = LocalBrowsePreferences(isolatedContext)
+        val expected = BrowseOptions(true, false, ArtistImageLayout.Large, false, autoPlayVideos = false)
+        preferences.save(expected)
+        assertEquals(expected, preferences.options.value)
+        assertEquals(expected, LocalBrowsePreferences(isolatedContext).options.value)
+        preferences.save(expected.copy(playGifs = true, swipeDelete = true))
+        assertEquals(expected.copy(playGifs = true, swipeDelete = true), LocalBrowsePreferences(isolatedContext).options.value)
+    }
+
+    @Test fun durableVideoSettingSurvivesRecreationWithOtherOptionsIntact() {
+        val preferences = LocalBrowsePreferences(isolatedContext)
+        val expected = BrowseOptions(imageLayout = ArtistImageLayout.Medium, autoPlayVideos = false)
+        preferences.saveDurably(expected)
+        assertEquals(expected, LocalBrowsePreferences(isolatedContext).options.value)
+        preferences.saveDurably(expected.copy(autoPlayVideos = true))
+        assertEquals(expected.copy(autoPlayVideos = true), LocalBrowsePreferences(isolatedContext).options.value)
+    }
 }

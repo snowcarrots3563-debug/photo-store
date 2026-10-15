@@ -160,7 +160,7 @@ class ArtistGridDatesUiTest {
         compose.onNodeWithText("还没有图片").assertIsDisplayed()
         compose.onNodeWithText("日期未知").assertDoesNotExist()
         compose.onNodeWithText("导入").performClick()
-        assertEquals(GalleryEvent.OpenImportTarget(artistId = "artist"), events.last())
+        assertEquals(GalleryEvent.OpenDialog(GalleryDialog.AddMenu), events.last())
     }
 
     private fun tile(id: String) = compose.onNodeWithTag("artistTile:$id")

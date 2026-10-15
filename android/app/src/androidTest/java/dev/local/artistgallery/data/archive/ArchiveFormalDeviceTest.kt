@@ -106,7 +106,9 @@ class ArchiveFormalDeviceTest {
             assertEquals(summary.getInt("importableGroups"), controller.state.value.collectionNames.size)
             val groups = db.galleryDao().archiveGroups(requireNotNull(taskId))
             val collections = db.galleryDao().getCollections(artist)
-            assertEquals(summary.getInt("importableGroups"), collections.size)
+            val importedTargets = items.filter { it.status in setOf("COMPLETE", "REUSED") }.mapNotNull { it.targetCollectionId }.distinct()
+            assertEquals(summary.getInt("importableGroups"), importedTargets.size)
+            assertEquals(importedTargets.toSet() + collections.single { it.isDefault }.id, collections.map { it.id }.toSet())
             val results = JSONArray()
             items.forEach { item ->
                 val expectedItem = expected.getValue(requireNotNull(item.sourceRelativePath))
@@ -117,8 +119,8 @@ class ArchiveFormalDeviceTest {
                     assertEquals(expectedItem.getLong("byteSize"), asset.byteSize)
                     assertEquals(asset.sha256, files.inspectOriginal(asset.storageKey).sha256)
                     assertEquals(1, repo.referenceCount(asset.id))
-                    val collection = requireNotNull(db.galleryDao().getCollection(requireNotNull(item.archiveGroupId)))
-                    val group = groups.single { it.id == collection.id }
+                    val collection = requireNotNull(db.galleryDao().getCollection(requireNotNull(item.targetCollectionId)))
+                    val group = groups.single { it.id == item.archiveGroupId }
                     assertEquals(preview.groups.single { it.relativeDirectory == group.relativeDirectory }.name, collection.name)
                     assertEquals(collection.id, item.targetCollectionId)
                     when (asset.mediaType) {
@@ -133,9 +135,8 @@ class ArchiveFormalDeviceTest {
                 } else result.put("reason", item.errorMessage)
                 results.put(result)
             }
-            collections.forEach { collection ->
-                val group = groups.single { it.id == collection.id }
-                assertEquals(preview.groups.single { it.relativeDirectory == group.relativeDirectory }.items.count { it.mediaType != null }, repo.observeCollectionMedia(collection.id).first().size)
+            importedTargets.forEach { target ->
+                assertEquals(items.count { it.targetCollectionId == target && it.status in setOf("COMPLETE", "REUSED") }, repo.observeCollectionMedia(target).first().size)
             }
             withTimeout(5_000) { while (File(external, ".archive-imports/$taskId").exists()) delay(50) }
             controller.done()
@@ -149,7 +150,8 @@ class ArchiveFormalDeviceTest {
             await(controller, ArchiveStep.Result)
             assertEquals(summary.getInt("supportedMedia"), repo.importItems(requireNotNull(taskId)).count { it.status == "COMPLETE" })
             assertEquals(summary.getString("archiveSha256"), sha256(source))
-            report.put("status", "PASSED").put("createdCollections", collections.size).put("newAssets", items.count { it.status == "COMPLETE" })
+            report.put("status", "PASSED").put("targetCollections", importedTargets.size).put("createdCollections", collections.count { !it.isDefault })
+                .put("artistDefaultCollections", collections.count { it.isDefault }).put("newAssets", items.count { it.status == "COMPLETE" })
                 .put("skippedFiles", items.count { it.status == "SKIPPED" }).put("wrongPasswordRetry", true).put("closeContinues", true)
                 .put("historyResumeIdempotent", true).put("cacheCleaned", true).put("elapsedMs", android.os.SystemClock.elapsedRealtime() - started).put("items", results)
             File(folder, "formal-device-results.json").writeText(report.toString(2))
