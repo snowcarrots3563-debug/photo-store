@@ -1,6 +1,7 @@
 package dev.local.artistgallery.ui
 
 import android.graphics.Bitmap
+import android.graphics.drawable.Drawable
 import android.widget.ImageView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -14,8 +15,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,12 +32,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.local.artistgallery.data.preview.PreviewDecoder
+import dev.local.artistgallery.data.preview.PreviewRequest
 import dev.local.artistgallery.data.preview.startIfAnimated
 import dev.local.artistgallery.data.preview.stopIfAnimated
 import dev.local.artistgallery.model.MediaType
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.withContext
 
 @Composable
 fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp) {
@@ -77,27 +78,55 @@ fun AnimatedGifImage(
     targetWidthPx: Int,
     targetHeightPx: Int,
 ) {
+    val image = rememberPreviewImage(storageKey, previewDecoder, targetWidthPx, targetHeightPx, animated = true, isCurrent = isVisible)
+    val drawable = (image as? PreviewImage.Animated)?.drawable
+    if (drawable != null) AnimatedDrawableImage(drawable, modifier, isVisible)
+    else Box(modifier.background(Color(0xFFEFF1F5)))
+}
+
+internal sealed interface PreviewImage {
+    val width: Int
+    val height: Int
+    class Still(val bitmap: Bitmap) : PreviewImage {
+        override val width get() = bitmap.width
+        override val height get() = bitmap.height
+    }
+    class Animated(val drawable: Drawable) : PreviewImage {
+        override val width get() = drawable.intrinsicWidth
+        override val height get() = drawable.intrinsicHeight
+    }
+}
+
+@Composable
+internal fun rememberPreviewImage(storageKey: String, decoder: PreviewDecoder?, width: Int, height: Int,
+                                  animated: Boolean = false, isCurrent: Boolean = true): PreviewImage? {
+    val scope = rememberCoroutineScope()
+    val image = remember(storageKey, decoder, animated) { mutableStateOf<PreviewImage?>(null) }
+    val request = remember(storageKey, decoder, animated) {
+        PreviewRequest<IntSize, PreviewImage>(scope, { size, priority, started ->
+            if (animated) decoder?.decodeAnimated(storageKey, size.width, size.height, priority, started)?.let { PreviewImage.Animated(it) }
+            else decoder?.decodeBitmap(storageKey, size.width, size.height, priority, started)?.let { PreviewImage.Still(it) }
+        }, { image.value = it })
+    }
+    DisposableEffect(request) { onDispose { request.cancel() } }
+    SideEffect { if (decoder != null && width > 0 && height > 0) request.update(IntSize(width, height), isCurrent) }
+    return image.value
+}
+
+@Composable
+internal fun AnimatedDrawableImage(drawable: Drawable, modifier: Modifier = Modifier, isVisible: Boolean = true) {
     val context = LocalContext.current
-    val drawable = produceState<android.graphics.drawable.Drawable?>(null, storageKey, previewDecoder, targetWidthPx, targetHeightPx) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { previewDecoder.decodeAnimated(storageKey, targetWidthPx, targetHeightPx) }.getOrNull()
-        }
-    }.value
     DisposableEffect(drawable, isVisible) {
-        if (isVisible) drawable?.startIfAnimated() else drawable?.stopIfAnimated()
-        onDispose { drawable?.stopIfAnimated() }
+        if (isVisible) drawable.startIfAnimated() else drawable.stopIfAnimated()
+        onDispose { drawable.stopIfAnimated() }
     }
-    if (drawable != null) {
-        AndroidView(
-            modifier = modifier,
-            factory = { ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER; adjustViewBounds = true } },
-            update = { view ->
-                if (view.drawable !== drawable) view.setImageDrawable(drawable)
-                if (isVisible) drawable.startIfAnimated() else drawable.stopIfAnimated()
-            },
-            onRelease = { drawable.stopIfAnimated() },
-        )
-    } else {
-        Box(modifier.background(Color(0xFFEFF1F5)))
-    }
+    AndroidView(
+        modifier = modifier,
+        factory = { ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER; adjustViewBounds = true } },
+        update = { view ->
+            if (view.drawable !== drawable) view.setImageDrawable(drawable)
+            if (isVisible) drawable.startIfAnimated() else drawable.stopIfAnimated()
+        },
+        onRelease = { view -> view.drawable?.stopIfAnimated(); view.setImageDrawable(null) },
+    )
 }

@@ -4,9 +4,10 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,6 +17,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -35,7 +37,10 @@ internal class ReorderRowsState(ids: List<String>) {
         private set
     var viewport = Rect.Zero
     val rowBounds = mutableStateMapOf<String, Rect>()
+    var beforeOrderChange: () -> Unit = {}
     private var originalOrder = ids
+
+    fun removeRow(id: String) { rowBounds.remove(id) }
 
     fun update(ids: List<String>, enabled: Boolean) {
         if (!enabled || ids.toSet() != order.toSet()) cancel()
@@ -61,17 +66,19 @@ internal class ReorderRowsState(ids: List<String>) {
         val id = draggedId ?: return
         val bounds = rowBounds[id] ?: return
         val center = draggedTop + bounds.height / 2f
-        val moved = order.toMutableList()
-        var index = moved.indexOf(id)
+        val index = order.indexOf(id)
         if (index < 0) return
-        while (index < moved.lastIndex && center > (rowBounds[moved[index + 1]]?.center?.y ?: Float.MAX_VALUE)) {
-            moved[index] = moved[index + 1]
-            moved[++index] = id
+        var target = index
+        for ((otherId, otherBounds) in rowBounds) {
+            if (otherId == id || otherBounds.bottom <= viewport.top || otherBounds.top >= viewport.bottom) continue
+            val otherIndex = order.indexOf(otherId)
+            if (center > bounds.center.y && otherIndex > target && center > otherBounds.center.y) target = otherIndex
+            if (center < bounds.center.y && otherIndex in 0 until target && center < otherBounds.center.y) target = otherIndex
         }
-        while (index > 0 && center < (rowBounds[moved[index - 1]]?.center?.y ?: -Float.MAX_VALUE)) {
-            moved[index] = moved[index - 1]
-            moved[--index] = id
-        }
+        if (target == index) return
+        val moved = order.toMutableList()
+        moved.add(target, moved.removeAt(index))
+        beforeOrderChange()
         order = moved
     }
 
@@ -84,15 +91,23 @@ internal class ReorderRowsState(ids: List<String>) {
     }
 
     fun cancel() {
-        if (draggedId != null) order = originalOrder
+        if (draggedId != null && order != originalOrder) {
+            beforeOrderChange()
+            order = originalOrder
+        }
         draggedId = null
     }
 }
 
 @Composable
-internal fun rememberReorderRows(ids: List<String>, enabled: Boolean, scrollBy: suspend (Float) -> Float): ReorderRowsState {
+internal fun rememberReorderRows(ids: List<String>, enabled: Boolean, listState: LazyListState): ReorderRowsState {
     val state = remember { ReorderRowsState(ids) }
-    val currentScroll by rememberUpdatedState(scrollBy)
+    SideEffect {
+        state.beforeOrderChange = {
+            // A dragged first-visible key must not pull the viewport along with its new index.
+            listState.requestScrollToItem(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+        }
+    }
     val edge = with(LocalDensity.current) { 56.dp.toPx() }
     val speed = with(LocalDensity.current) { 800.dp.toPx() }
     // Both lists reserve this space for the floating bottom navigation.
@@ -111,7 +126,7 @@ internal fun rememberReorderRows(ids: List<String>, enabled: Boolean, scrollBy: 
                 state.pointerY > viewport.bottom - navigationSpace - edge -> ((state.pointerY - viewport.bottom + navigationSpace + edge) / edge).coerceAtMost(1f)
                 else -> 0f
             }
-            if (direction != 0f && viewport.height > 0f) currentScroll(direction * speed * seconds)
+            if (direction != 0f && viewport.height > 0f) listState.scrollBy(direction * speed * seconds)
             state.reorder()
         }
     }
@@ -120,11 +135,12 @@ internal fun rememberReorderRows(ids: List<String>, enabled: Boolean, scrollBy: 
 
 @Composable
 internal fun ReorderRow(state: ReorderRowsState, id: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    DisposableEffect(state, id) { onDispose { state.removeRow(id) } }
     Box(modifier.onGloballyPositioned {
         val position = it.positionInRoot()
         state.rowBounds[id] = Rect(position.x, position.y, position.x + it.size.width, position.y + it.size.height)
     }.zIndex(if (state.draggedId == id) 1f else 0f)) {
-        Box(Modifier.graphicsLayer { translationY = state.translation(id); shadowElevation = if (state.draggedId == id) 8.dp.toPx() else 0f }.background(DColors.Panel)) { content() }
+        Box(Modifier.graphicsLayer { translationY = state.translation(id); shadowElevation = if (state.draggedId == id) 8.dp.toPx() else 0f }) { content() }
     }
 }
 
@@ -132,25 +148,29 @@ internal fun ReorderRow(state: ReorderRowsState, id: String, modifier: Modifier 
 internal fun ReorderHandle(state: ReorderRowsState, id: String, name: String, enabled: Boolean, onCommit: (List<String>) -> Unit) {
     var bounds by remember { mutableStateOf(Rect.Zero) }
     val currentCommit by rememberUpdatedState(onCommit)
+    val pinnableContainer = LocalPinnableContainer.current
     Box(Modifier.size(48.dp).testTag("reorder:$id").semantics { contentDescription = "长按拖动排序：$name" }
         .onGloballyPositioned {
             val position = it.positionInRoot()
             bounds = Rect(position.x, position.y, position.x + it.size.width, position.y + it.size.height)
         }
-        .pointerInput(state, id, enabled) {
+        .pointerInput(state, id, enabled, pinnableContainer) {
             if (!enabled) return@pointerInput
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 // The handle owns the press, so a parent row cannot enter multi-selection too.
                 down.consume()
                 val press = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
-                state.start(id, bounds.top + press.position.y)
+                val pinned = pinnableContainer?.pin()
                 try {
+                    state.start(id, bounds.top + press.position.y)
                     val released = drag(press.id) { change -> state.move(change.positionChange().y); change.consume() }
                     if (released) state.finish(currentCommit) else state.cancel()
                 } catch (cancelled: CancellationException) {
                     state.cancel()
                     throw cancelled
+                } finally {
+                    pinned?.release()
                 }
             }
         }, contentAlignment = Alignment.Center) {

@@ -53,3 +53,5 @@ data class ImportBatchSummary(
     val status: String,
     val items: List<ImportItemSummary>,
 )
+
+data class ImportBatchHistorySummary(val id: String, val status: String)

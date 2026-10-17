@@ -1,6 +1,8 @@
 package dev.local.artistgallery.ui
 
 import dev.local.artistgallery.model.*
+import dev.local.artistgallery.data.ArtistImageLayout
+import java.time.ZoneId
 
 enum class LoadState { Loading, Ready, Failed }
 enum class ArtistTab { Images, Collections }
@@ -48,6 +50,15 @@ sealed interface GalleryDialog {
 }
 data class GalleryScrollPosition(val index: Int = 0, val offset: Int = 0)
 
+// Keep snapshot comparison constant-time when StateFlow publishes on Main.
+class PreparedMedia(
+    val items: List<MediaAssetSummary>,
+    val sort: MediaSort,
+    val layout: ArtistImageLayout,
+    val zoneId: ZoneId,
+    val gridRows: List<ArtistGridRow>,
+)
+
 data class GalleryUiState(
     val loadState: LoadState = LoadState.Loading,
     val route: GalleryRoute = GalleryRoute.Home,
@@ -61,7 +72,7 @@ data class GalleryUiState(
     val dialog: GalleryDialog = GalleryDialog.None,
     val isSaving: Boolean = false,
     val fieldError: String? = null,
-    val mediaItems: List<MediaAssetSummary> = emptyList(),
+    val preparedMedia: PreparedMedia? = null,
     val mediaLoadState: LoadState = LoadState.Loading,
     val scrollPositions: Map<String, GalleryScrollPosition> = emptyMap(),
     val importTargetCollections: List<CollectionSummary> = emptyList(),
@@ -71,7 +82,7 @@ data class GalleryUiState(
     val pendingImportTargetCollectionId: String? = null,
     val pendingImportDefaultArtistId: String? = null,
     val pendingAddAssetIds: List<String> = emptyList(),
-    val recentImportBatches: List<ImportBatchSummary> = emptyList(),
+    val recentImportBatches: List<ImportBatchHistorySummary> = emptyList(),
     val selectedMediaIds: Set<String> = emptySet(),
     val mediaSelectionMode: Boolean = false,
     val entitySelectionKind: EntitySelectionKind? = null,
@@ -79,7 +90,9 @@ data class GalleryUiState(
     val coverItems: List<MediaAssetSummary> = emptyList(),
     val coverLoadState: LoadState = LoadState.Loading,
     val browseOptions: dev.local.artistgallery.data.BrowseOptions = dev.local.artistgallery.data.BrowseOptions(),
-)
+) {
+    val mediaItems: List<MediaAssetSummary> get() = preparedMedia?.items.orEmpty()
+}
 sealed interface GalleryEvent {
     data class SearchChanged(val query: String) : GalleryEvent
     data object ClearSearch : GalleryEvent

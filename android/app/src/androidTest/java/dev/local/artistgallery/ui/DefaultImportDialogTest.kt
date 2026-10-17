@@ -22,7 +22,7 @@ class DefaultImportDialogTest {
     private fun state(target: GalleryDialog.ImportTarget) = GalleryUiState(artists = listOf(artist), route = GalleryRoute.Artist(artist.id), dialog = target)
     private fun show(state: GalleryUiState, screen: Boolean = false) {
         compose.activity.setContent {
-            current = remember { mutableStateOf(state) }
+            current = remember { mutableStateOf(if (screen) state.withPreparedMedia(emptyList()) else state) }
             DTheme {
                 if (screen) ArtistDetailScreen(current.value, 20.dp, null, null, events::add)
                 else GalleryDialogs(current.value, null, events::add)

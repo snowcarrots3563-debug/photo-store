@@ -152,7 +152,7 @@ class ArtistSwipeUiTest {
     private fun show() {
         val detail = ArtistDetail(ArtistSummary("artist", "画师样本", 1, images.size), emptyList())
         val state = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-            route = GalleryRoute.Artist("artist"), artistDetail = detail, mediaItems = images)
+            route = GalleryRoute.Artist("artist"), artistDetail = detail, ).withPreparedMedia(images)
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
             DTheme { ArtistDetailScreen(state, 18.dp, null, null, events::add) }
         } }

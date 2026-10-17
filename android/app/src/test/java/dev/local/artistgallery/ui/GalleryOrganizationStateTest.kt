@@ -26,7 +26,7 @@ class GalleryOrganizationStateTest {
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
 
     private fun model(repo: OrganizationRepository = OrganizationRepository(), prefs: Preferences = Preferences(), handle: SavedStateHandle = SavedStateHandle()): GalleryViewModel =
-        GalleryViewModel(repo, handle, browsePreferences = prefs).also { store.put("organization${serial++}", it) }
+        GalleryViewModel(repo, handle, browsePreferences = prefs, computationDispatcher = dispatcher).also { store.put("organization${serial++}", it) }
 
     @Test fun homeLongPressThenTapSelectsWithoutNavigatingAndZeroRemainsInMode() = runTest(dispatcher) {
         val vm = model()

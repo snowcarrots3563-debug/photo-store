@@ -7,6 +7,7 @@ import dev.local.artistgallery.model.CollectionSummary
 import dev.local.artistgallery.model.CoverRef
 import dev.local.artistgallery.model.AddReferenceResult
 import dev.local.artistgallery.model.ImportBatchSummary
+import dev.local.artistgallery.model.ImportBatchHistorySummary
 import dev.local.artistgallery.model.ImportItemStatus
 import dev.local.artistgallery.model.ImportItemSummary
 import dev.local.artistgallery.model.MediaAssetSummary
@@ -16,25 +17,29 @@ import dev.local.artistgallery.model.SaveResult
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 
-class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepository, MediaLibraryRepository {
+class RoomGalleryRepository(private val database: GalleryDatabase,
+    private val computationDispatcher: CoroutineDispatcher = Dispatchers.Default) : GalleryRepository, MediaLibraryRepository {
     private val dao = database.galleryDao()
 
     override fun observeArtists(): Flow<List<ArtistSummary>> =
-        dao.observeArtists().map { rows -> rows.map { it.summary() } }
+        dao.observeArtists().map { rows -> rows.map { it.summary() } }.flowOn(computationDispatcher)
 
     override fun observeArtist(id: String): Flow<ArtistDetail?> =
         combine(dao.observeArtist(id), dao.observeCollectionsForArtist(id)) { row, collections ->
             row?.let { ArtistDetail(it.summary(), collections.map { collection -> collection.summary() }) }
-        }
+        }.flowOn(computationDispatcher)
 
     override fun observeCollection(id: String): Flow<CollectionSummary?> =
-        dao.observeCollection(id).map { it?.summary() }
+        dao.observeCollection(id).map { it?.summary() }.flowOn(computationDispatcher)
 
     override suspend fun createArtist(name: String): SaveResult = save {
         val normalized = NameRules.normalize(name)
@@ -95,13 +100,13 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
     }
 
     override fun observeCollectionMedia(collectionId: String): Flow<List<MediaAssetSummary>> =
-        dao.observeCollectionMedia(collectionId).map { rows -> rows.map { it.summary() } }
+        dao.observeCollectionMedia(collectionId).map { rows -> rows.map { it.summary() } }.distinctUntilChanged().flowOn(computationDispatcher)
 
     override fun observeArtistImages(artistId: String): Flow<List<MediaAssetSummary>> =
-        dao.observeArtistImages(artistId).map { rows -> rows.map { it.summary() } }
+        dao.observeArtistImages(artistId).map { rows -> rows.map { it.summary() } }.distinctUntilChanged().flowOn(computationDispatcher)
 
     override fun observeUnassignedMedia(): Flow<List<MediaAssetSummary>> =
-        dao.observeUnassignedMedia().map { rows -> rows.map { it.summary() } }
+        dao.observeUnassignedMedia().map { rows -> rows.map { it.summary() } }.distinctUntilChanged().flowOn(computationDispatcher)
 
     override suspend fun findAssetsByContent(sha256: String, byteSize: Long): List<MediaAssetEntity> =
         withContext(Dispatchers.IO) { dao.findAssetsByContent(sha256, byteSize) }
@@ -168,8 +173,11 @@ class RoomGalleryRepository(private val database: GalleryDatabase) : GalleryRepo
         dao.getImportBatchResult(batchId)?.summary()
     }
 
-    override fun observeLatestImportBatches(): Flow<List<ImportBatchSummary>> =
-        dao.observeLatestImportBatches().map { batches -> batches.map { it.summary() } }
+    override fun observeLatestImportBatches(): Flow<List<ImportBatchHistorySummary>> =
+        dao.observeLatestImportBatches().distinctUntilChanged()
+
+    override fun observeImportBatchResult(batchId: String): Flow<ImportBatchSummary?> =
+        dao.observeImportBatchResult(batchId).map { it?.summary() }.distinctUntilChanged().flowOn(computationDispatcher)
 
     private fun ImportBatchWithItems.summary() = ImportBatchSummary(
         batch.id,

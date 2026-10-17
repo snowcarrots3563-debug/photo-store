@@ -120,7 +120,7 @@ class LocalTransferUiTest {
             MediaAssetSummary("second", "第二张.png", MediaType.IMAGE, 1024, 1, "2.png", "second"),
         )
         compose.activity.setContent { DTheme {
-            ImageViewerScreen(GalleryUiState(mediaItems = images, browseOptions = BrowseOptions(cardEffects = false)), "first", null,
+            ImageViewerScreen(GalleryUiState( browseOptions = BrowseOptions(cardEffects = false)).withPreparedMedia(images), "first", null,
                 onEvent = {}, onExport = { calls.add(it) })
         } }
         compose.onNodeWithTag("imagePager").performTouchInput { swipeLeft() }

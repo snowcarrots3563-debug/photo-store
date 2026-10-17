@@ -21,7 +21,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -31,7 +33,7 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, InternalCoroutinesApi::class)
 class ImportNotificationViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val store = ViewModelStore()
@@ -40,7 +42,131 @@ class ImportNotificationViewModelTest {
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
 
     private fun model(source: Results, saved: SavedStateHandle = SavedStateHandle()) =
-        GalleryViewModel(Gallery(), saved, mediaRepository = source.repository()).also { store.put("notification${serial++}", it) }
+        GalleryViewModel(Gallery(), saved, mediaRepository = source.repository(), computationDispatcher = dispatcher).also { store.put("notification${serial++}", it) }
+
+    @Test fun historyOfThousandItemBatchesDoesNotReadOrObserveDetails() = runTest(dispatcher) {
+        val source = Results().apply {
+            batches.replaceAll { _, batch -> batch.copy(items = (0 until 1500).map { batch.items.single().copy(id = "item-$it") }) }
+        }
+        val vm = model(source)
+        runCurrent()
+        assertEquals(source.batches.values.map { ImportBatchHistorySummary(it.id, it.status) }, vm.state.value.recentImportBatches)
+        assertTrue(source.reads.isEmpty())
+        assertTrue(source.detailSubscriptions.isEmpty())
+        assertNull(vm.state.value.importResult)
+    }
+
+    @Test fun visibleOldResultTracksFullDetailsWithoutUsingLatestHistory() = runTest(dispatcher) {
+        val source = Results().apply { batches["old"] = batch("old", retry = true) }
+        val vm = model(source)
+        vm.onEvent(GalleryEvent.OpenImportResult("old")); runCurrent()
+        assertEquals(listOf("old"), source.detailSubscriptions)
+        val updated = batch("old").copy(items = (0 until 1500).map { batch("old").items.single().copy(id = "item-$it") })
+        source.publish(updated); runCurrent()
+        assertEquals(updated, vm.state.value.importResult)
+        assertNull(vm.importPermissionActionKey(GalleryEvent.RetryImport("old")))
+        assertEquals(listOf("old"), source.detailSubscriptions)
+        assertFalse(vm.state.value.recentImportBatches.any { it.id == "old" })
+    }
+
+    @Test fun closingAndReopeningAResultReleasesThenReattachesItsDetails() = runTest(dispatcher) {
+        val source = Results()
+        val vm = model(source)
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        assertEquals(setOf("recent-0"), source.activeDetails)
+        vm.onEvent(GalleryEvent.DismissDialog); runCurrent()
+        assertTrue(source.activeDetails.isEmpty())
+        val updated = batch("recent-0", retry = true)
+        source.publish(updated); runCurrent()
+        assertEquals(GalleryDialog.None, vm.state.value.dialog)
+        assertNotEquals(updated, vm.state.value.importResult)
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        assertEquals(updated, vm.state.value.importResult)
+        assertEquals(listOf("recent-0", "recent-0"), source.detailSubscriptions)
+    }
+
+    @Test fun ordinaryEventsDoNotRestartOrCancelVisibleDetails() = runTest(dispatcher) {
+        val source = Results()
+        val vm = model(source)
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        vm.onEvent(GalleryEvent.SearchChanged("synthetic"))
+        vm.onEvent(GalleryEvent.ClearSearch)
+        vm.onEvent(GalleryEvent.RememberScrollPosition("home", 4, 72)); runCurrent()
+        val updated = batch("recent-0", retry = true)
+        source.publish(updated); runCurrent()
+        assertEquals(updated, vm.state.value.importResult)
+        assertEquals(listOf("recent-0"), source.detailSubscriptions)
+        assertEquals(setOf("recent-0"), source.activeDetails)
+    }
+
+    @Test fun replacingTheResultDialogOrNavigatingStopsItsDetails() = runTest(dispatcher) {
+        val source = Results()
+        val vm = model(source)
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        vm.onEvent(GalleryEvent.OpenDialog(GalleryDialog.About)); runCurrent()
+        assertTrue(source.activeDetails.isEmpty())
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        vm.onEvent(GalleryEvent.OpenManage); runCurrent()
+        assertTrue(source.activeDetails.isEmpty())
+        assertEquals(GalleryDialog.None, vm.state.value.dialog)
+    }
+
+    @Test fun failedDetailObservationPreservesResultAndSameIdCanBeOpenedAgain() = runTest(dispatcher) {
+        val source = Results().apply { detailFailures["recent-0"] = IllegalStateException("合成详情失败") }
+        val vm = model(source)
+        val messages = mutableListOf<GalleryFeedback>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.feedback.toList(messages) }
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        assertEquals(source.batches["recent-0"], vm.state.value.importResult)
+        assertEquals(GalleryDialog.ImportResult("recent-0"), vm.state.value.dialog)
+        assertEquals(listOf(GalleryFeedback.Saved("合成详情失败")), messages)
+        assertTrue(source.activeDetails.isEmpty())
+        vm.onEvent(GalleryEvent.SearchChanged("synthetic")); runCurrent()
+        assertEquals(listOf("recent-0"), source.detailSubscriptions)
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        val updated = batch("recent-0", retry = true)
+        source.publish(updated); runCurrent()
+        assertEquals(updated, vm.state.value.importResult)
+        assertEquals(listOf("recent-0", "recent-0"), source.detailSubscriptions)
+        assertEquals(setOf("recent-0"), source.activeDetails)
+    }
+
+    @Test fun cancelledDetailCollectorCannotPublishAfterAnotherBatchOpens() = runTest(dispatcher) {
+        val source = Results()
+        lateinit var staleCollector: FlowCollector<ImportBatchSummary?>
+        source.detailSources["recent-0"] = object : Flow<ImportBatchSummary?> {
+            override suspend fun collect(collector: FlowCollector<ImportBatchSummary?>) {
+                source.detailSubscriptions.add("recent-0")
+                source.activeDetails.add("recent-0")
+                try {
+                    staleCollector = collector
+                    collector.emit(source.batches["recent-0"])
+                    awaitCancellation()
+                } finally { source.activeDetails.remove("recent-0") }
+            }
+        }
+        val vm = model(source)
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-1")); runCurrent()
+        val rejected = runCatching { staleCollector.emit(batch("recent-0", retry = true)) }.exceptionOrNull()
+        assertTrue(rejected is CancellationException)
+        runCurrent()
+        assertEquals(source.batches["recent-1"], vm.state.value.importResult)
+        assertEquals(GalleryDialog.ImportResult("recent-1"), vm.state.value.dialog)
+        assertEquals(setOf("recent-1"), source.activeDetails)
+    }
+
+    @Test fun missingObservedDetailsPreserveTheLastFullResultAndGiveFeedback() = runTest(dispatcher) {
+        val source = Results()
+        val vm = model(source)
+        val messages = mutableListOf<GalleryFeedback>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.feedback.toList(messages) }
+        vm.onEvent(GalleryEvent.OpenImportResult("recent-0")); runCurrent()
+        source.details.getValue("recent-0").value = null; runCurrent()
+        assertEquals(source.batches["recent-0"], vm.state.value.importResult)
+        assertEquals(listOf(GalleryFeedback.Saved("导入记录不存在。")), messages)
+        assertEquals(GalleryDialog.ImportResult("recent-0"), vm.state.value.dialog)
+    }
 
     @Test fun notificationReadsAnOldBatchOutsideLatestTenWithoutRetryOrWrites() = runTest(dispatcher) {
         val source = Results().apply { batches["old"] = batch("old") }
@@ -183,7 +309,7 @@ class ImportNotificationViewModelTest {
         vm.onEvent(GalleryEvent.OpenImportResult("old"))
         runCurrent()
         val loaded = vm.state.value.importResult
-        source.latest.value = listOf(batch("newest"))
+        source.latest.value = listOf(ImportBatchHistorySummary("newest", "COMPLETED"))
         runCurrent()
         assertSame(loaded, vm.state.value.importResult)
         assertEquals(GalleryDialog.ImportResult("old"), vm.state.value.dialog)
@@ -254,18 +380,38 @@ class ImportNotificationViewModelTest {
 
     private inner class Results {
         val batches = (0 until 10).associate { "recent-$it" to batch("recent-$it") }.toMutableMap()
-        val latest = MutableStateFlow(batches.values.toList())
+        val latest = MutableStateFlow(batches.values.map { ImportBatchHistorySummary(it.id, it.status) })
+        val details = mutableMapOf<String, MutableStateFlow<ImportBatchSummary?>>()
+        val detailSources = mutableMapOf<String, Flow<ImportBatchSummary?>>()
+        val detailSubscriptions = mutableListOf<String>()
+        val activeDetails = mutableSetOf<String>()
+        val detailFailures = mutableMapOf<String, Exception>()
         val reads = mutableListOf<String>()
         val gates = mutableMapOf<String, CompletableDeferred<Unit>>()
         val returnedReads = mutableListOf<String>()
         var readScope: CoroutineScope? = null
         var failure: Exception? = null
         var writes = 0
+        fun publish(batch: ImportBatchSummary) {
+            batches[batch.id] = batch
+            details.getOrPut(batch.id) { MutableStateFlow(batch) }.value = batch
+        }
         @Suppress("UNCHECKED_CAST")
         fun repository(): MediaLibraryRepository = Proxy.newProxyInstance(MediaLibraryRepository::class.java.classLoader,
             arrayOf(MediaLibraryRepository::class.java)) { _, method, arguments ->
             when (method.name) {
                 "observeLatestImportBatches" -> latest
+                "observeImportBatchResult" -> {
+                    val id = arguments!![0] as String
+                    detailSources[id] ?: flow {
+                        detailSubscriptions.add(id)
+                        activeDetails.add(id)
+                        try {
+                            detailFailures.remove(id)?.let { throw it }
+                            emitAll(details.getOrPut(id) { MutableStateFlow(batches[id]) })
+                        } finally { activeDetails.remove(id) }
+                    }
+                }
                 "getImportBatchResult" -> {
                     val id = arguments!![0] as String
                     reads.add(id)

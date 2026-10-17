@@ -37,7 +37,8 @@ class OrganizationUiTest {
 
     @Test fun deselectingAllKeepsModeAndDeepSelectionStillShowsTrash() {
         showHome()
-        compose.onNodeWithText("画师 10").performScrollTo().performTouchInput { longClick() }
+        compose.onNodeWithTag("artistHomeList").performScrollToIndex(12)
+        compose.onNodeWithText("画师 10").performTouchInput { longClick() }
         compose.onNodeWithContentDescription("删除所选画师").assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithText("画师 10").performClick()
         compose.onNodeWithText("已选择 0 项").assertIsDisplayed()
@@ -72,7 +73,7 @@ class OrganizationUiTest {
 
     @Test fun collectionSelectionDisablesTabsAndCreationAndRequestsConfirmation() {
         show(GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-            artistDetail = detail, route = GalleryRoute.Artist("artist0"), artistTab = ArtistTab.Collections)) {
+            artistDetail = detail, route = GalleryRoute.Artist("artist0"), artistTab = ArtistTab.Collections).withPreparedMedia(emptyList())) {
             ArtistDetailScreen(it, 18.dp, null, null, ::event)
         }
         compose.onNodeWithTag("reorder:collection0").assertDoesNotExist()
@@ -91,7 +92,7 @@ class OrganizationUiTest {
 
     @Test fun collectionHandleDragCommitsTheArtistScopedOrder() {
         show(GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-            artistDetail = detail, route = GalleryRoute.Artist("artist0"), artistTab = ArtistTab.Collections)) {
+            artistDetail = detail, route = GalleryRoute.Artist("artist0"), artistTab = ArtistTab.Collections).withPreparedMedia(emptyList())) {
             ArtistDetailScreen(it, 18.dp, null, null, ::event)
         }
         compose.onNodeWithTag("reorder:collection0").assertDoesNotExist()
@@ -117,7 +118,7 @@ class OrganizationUiTest {
 
     @Test fun imageViewCapsuleSendsCycleInsteadOfOpeningTheOldMenu() {
         show(GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-            artistDetail = detail, route = GalleryRoute.Artist("artist0"))) {
+            artistDetail = detail, route = GalleryRoute.Artist("artist0")).withPreparedMedia(emptyList())) {
             ArtistDetailScreen(it, 18.dp, null, null, ::event)
         }
         compose.onNodeWithText("切换视图").assertIsDisplayed().performClick()
@@ -137,7 +138,7 @@ class OrganizationUiTest {
         val image = MediaAssetSummary("image", "图片.png", MediaType.IMAGE, 6000, 0, "图片.png", "key")
         show(GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
             route = GalleryRoute.Collection("collection0", "artist0"), artistDetail = detail,
-            collection = collections.first(), mediaItems = listOf(image))) { CollectionScreen(it, 18.dp, null, ::event) }
+            collection = collections.first(), ).withPreparedMedia(listOf(image))) { CollectionScreen(it, 18.dp, null, ::event) }
         compose.onNodeWithContentDescription("删除图片").performClick()
         assertEquals(GalleryEvent.OpenDeleteMedia("image"), events.last())
         assertTrue(events.none { it is GalleryEvent.OpenRemoveMedia || it == GalleryEvent.ConfirmDeleteMedia })

@@ -109,7 +109,7 @@ class ImageShareUiTest {
 
     @Test fun originalFourArgumentViewerKeepsItsMenuAndDisablesSharing() {
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
-            DTheme { ImageViewerScreen(GalleryUiState(mediaItems = images), "first", null) {} }
+            DTheme { ImageViewerScreen(GalleryUiState().withPreparedMedia(images), "first", null) {} }
         } }
         compose.onNodeWithContentDescription("图片操作").performClick()
         compose.onNodeWithText("加入其他作品集").assertIsEnabled()
@@ -280,7 +280,7 @@ class ImageShareUiTest {
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
             var selected by remember { mutableStateOf("first") }
             DTheme { ImageViewerScreen(
-                GalleryUiState(mediaItems = images, browseOptions = BrowseOptions(cardEffects = cardEffects)), selected, null,
+                GalleryUiState( browseOptions = BrowseOptions(cardEffects = cardEffects)).withPreparedMedia(images), selected, null,
                 onEvent = { event ->
                     if (updateSelection) when (event) {
                         is GalleryEvent.OpenMedia -> selected = event.assetId

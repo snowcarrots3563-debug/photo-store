@@ -114,9 +114,9 @@ class ArtistMediaSelectionUiTest {
 
     private fun show(layout: ArtistImageLayout = ArtistImageLayout.List, selection: Boolean = false, saving: Boolean = false, swipeDelete: Boolean = true) {
         val initial = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-            route = GalleryRoute.Artist("artist"), artistDetail = detail, mediaItems = images,
+            route = GalleryRoute.Artist("artist"), artistDetail = detail,
             browseOptions = BrowseOptions(imageLayout = layout, swipeDelete = swipeDelete), mediaSelectionMode = selection,
-            selectedMediaIds = if (selection) setOf("image0") else emptySet(), isSaving = saving)
+            selectedMediaIds = if (selection) setOf("image0") else emptySet(), isSaving = saving).withPreparedMedia(images)
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
             current = remember { mutableStateOf(initial) }
             DTheme {

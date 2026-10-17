@@ -2,6 +2,7 @@ package dev.local.artistgallery.data
 
 import dev.local.artistgallery.model.AddReferenceResult
 import dev.local.artistgallery.model.ImportBatchSummary
+import dev.local.artistgallery.model.ImportBatchHistorySummary
 import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.ReferenceRemovalResult
 import kotlinx.coroutines.flow.Flow
@@ -28,7 +29,8 @@ interface MediaLibraryRepository {
     suspend fun getImportItem(batchId: String, id: String): ImportItemEntity?
     suspend fun latestImportBatches(): List<ImportBatchSummary>
     suspend fun getImportBatchResult(batchId: String): ImportBatchSummary? = latestImportBatches().firstOrNull { it.id == batchId }
-    fun observeLatestImportBatches(): Flow<List<ImportBatchSummary>>
+    fun observeLatestImportBatches(): Flow<List<ImportBatchHistorySummary>>
+    fun observeImportBatchResult(batchId: String): Flow<ImportBatchSummary?>
     suspend fun commitNewAsset(asset: MediaAssetEntity, targetCollectionId: String?, sourceName: String)
     suspend fun commitReusedImport(item: ImportItemEntity, assetId: String)
     suspend fun commitArchiveImport(item: ImportItemEntity, asset: MediaAssetEntity, reused: Boolean) { error("压缩导入仓储未接入") }

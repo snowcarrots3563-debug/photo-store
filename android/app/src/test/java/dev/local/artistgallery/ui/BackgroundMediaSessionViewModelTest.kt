@@ -16,6 +16,7 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class BackgroundMediaSessionViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val store = ViewModelStore()
@@ -33,15 +34,27 @@ class BackgroundMediaSessionViewModelTest {
     }
     private val old = ImportBatchSummary("old", "COMPLETED", emptyList())
     private val result = ImportBatchSummary("new", "COMPLETED", emptyList())
-    private val media = Proxy.newProxyInstance(MediaLibraryRepository::class.java.classLoader, arrayOf(MediaLibraryRepository::class.java)) { _, method, _ ->
+    private val details = mapOf("old" to MutableStateFlow<ImportBatchSummary?>(old), "new" to MutableStateFlow<ImportBatchSummary?>(result))
+    private val detailSubscriptions = mutableListOf<String>()
+    private val activeDetails = mutableMapOf<String, Int>()
+    private val media = Proxy.newProxyInstance(MediaLibraryRepository::class.java.classLoader, arrayOf(MediaLibraryRepository::class.java)) { _, method, args ->
         when (method.name) {
-            "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchSummary>())
+            "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchHistorySummary>())
             "getImportBatchResult" -> old
+            "observeImportBatchResult" -> {
+                val id = args!![0] as String
+                flow {
+                    detailSubscriptions.add(id)
+                    activeDetails[id] = (activeDetails[id] ?: 0) + 1
+                    try { emitAll(details.getValue(id)) }
+                    finally { activeDetails[id] = activeDetails.getValue(id) - 1 }
+                }
+            }
             else -> error("Unexpected repository call ${method.name}")
         }
     } as MediaLibraryRepository
     private fun model(session: MediaImportSession, saved: SavedStateHandle = SavedStateHandle()) =
-        GalleryViewModel(gallery, saved, mediaRepository = media, mediaImportSession = session).also { store.put("session${serial++}", it) }
+        GalleryViewModel(gallery, saved, mediaRepository = media, mediaImportSession = session, computationDispatcher = dispatcher).also { store.put("session${serial++}", it) }
 
     @Test fun clearingFirstViewModelKeepsWorkAndSecondReattachesWithoutDuplicateCompletion() = runTest(dispatcher) {
         val gate = CompletableDeferred<Unit>()
@@ -81,6 +94,7 @@ class BackgroundMediaSessionViewModelTest {
         finish.complete(Unit); runCurrent()
         assertEquals(GalleryDialog.None, vm.state.value.dialog)
         assertEquals(result, vm.state.value.importResult)
+        assertTrue(detailSubscriptions.isEmpty())
     }
 
     @Test fun finishedOutcomeWaitsForAnObserverAndIsHandledOnce() = runTest(dispatcher) {
@@ -105,6 +119,39 @@ class BackgroundMediaSessionViewModelTest {
         gate.complete(Unit); runCurrent()
         assertEquals(GalleryDialog.ImportResult("old"), vm.state.value.dialog)
         assertEquals(old, vm.state.value.importResult)
+        assertEquals(0, activeDetails["new"] ?: 0)
+        assertEquals(1, activeDetails["old"])
+    }
+
+    @Test fun automaticallyDisplayedResultObservesLaterPersistentDetails() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val session = MediaImportSession(backgroundScope, gallery, { _, _, _ -> gate.await(); result }, { _, _ -> result })
+        val vm = model(session)
+        session.start(listOf("synthetic"), null, null); runCurrent()
+        assertTrue(detailSubscriptions.isEmpty())
+        gate.complete(Unit); runCurrent()
+        assertEquals(GalleryDialog.ImportResult("new"), vm.state.value.dialog)
+        assertEquals(listOf("new"), detailSubscriptions)
+        val updated = result.copy(status = "FAILED", items = listOf(ImportItemSummary("item", "synthetic.png", ImportItemStatus.FAILED, "synthetic", true)))
+        details.getValue("new").value = updated; runCurrent()
+        assertEquals(updated, vm.state.value.importResult)
+        vm.onEvent(GalleryEvent.DismissDialog); runCurrent()
+        assertEquals(0, activeDetails["new"])
+    }
+
+    @Test fun retryStopsVisibleDetailsAndCompletionReattachesThem() = runTest(dispatcher) {
+        val retryGate = CompletableDeferred<Unit>()
+        val session = MediaImportSession(backgroundScope, gallery, { _, _, _ -> result }, { _, _ -> retryGate.await(); result })
+        val vm = model(session)
+        session.start(listOf("synthetic"), null, null); runCurrent()
+        assertEquals(1, activeDetails["new"])
+        vm.onEvent(GalleryEvent.RetryImport("new")); runCurrent()
+        assertEquals(GalleryDialog.ImportProgress, vm.state.value.dialog)
+        assertEquals(0, activeDetails["new"])
+        retryGate.complete(Unit); runCurrent()
+        assertEquals(GalleryDialog.ImportResult("new"), vm.state.value.dialog)
+        assertEquals(listOf("new", "new"), detailSubscriptions)
+        assertEquals(1, activeDetails["new"])
     }
 
     @Test fun consumingAPriorOutcomePreservesNewPreviewAndItsExplicitImportTarget() = runTest(dispatcher) {

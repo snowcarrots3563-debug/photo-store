@@ -81,8 +81,8 @@ class ArtistGridDatesUiTest {
             val sorted = sortArtistImages(images, sort)
             compose.runOnIdle {
                 visible.value = true
-                current.value = current.value.copy(mediaItems = sorted,
-                    browseOptions = current.value.browseOptions.copy(artistImageSorts = mapOf("artist" to sort)))
+                current.value = current.value.copy(
+                    browseOptions = current.value.browseOptions.copy(artistImageSorts = mapOf("artist" to sort))).withPreparedMedia(sorted)
             }
             val positions = sorted.map { image ->
                 compose.onNodeWithTag("artistDateHeader:${image.id}").assertDoesNotExist()
@@ -176,11 +176,11 @@ class ArtistGridDatesUiTest {
         assertTrue(events[openIndex - 1] is GalleryEvent.RememberScrollPosition)
         compose.runOnIdle { assertTrue(current.value.scrollPositions.getValue("artist:artist:Images:${layout.name}:${sort.name}").index >= 7) }
         compose.runOnIdle {
-            current.value = current.value.copy(loadState = LoadState.Loading, mediaLoadState = LoadState.Loading, mediaItems = emptyList())
+            current.value = current.value.copy(loadState = LoadState.Loading, mediaLoadState = LoadState.Loading, ).withPreparedMedia(emptyList())
             visible.value = true
         }
         compose.onNodeWithTag("artistMediaList").assertDoesNotExist()
-        compose.runOnIdle { current.value = current.value.copy(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready, mediaItems = images) }
+        compose.runOnIdle { current.value = current.value.copy(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready, ).withPreparedMedia(images) }
         assertEquals(before, tile(targetId).assertIsDisplayed().fetchSemanticsNode().positionInRoot.y, 1f)
     }
 
@@ -192,9 +192,9 @@ class ArtistGridDatesUiTest {
         width: Dp = 360.dp,
     ) {
         val initial = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-            route = GalleryRoute.Artist("artist"), mediaItems = images,
+            route = GalleryRoute.Artist("artist"),
             artistDetail = ArtistDetail(ArtistSummary("artist", "画师样本", 1, images.size), listOf(collection)),
-            browseOptions = BrowseOptions(imageLayout = layout, artistImageSorts = mapOf("artist" to sort)))
+            browseOptions = BrowseOptions(imageLayout = layout, artistImageSorts = mapOf("artist" to sort))).withPreparedMedia(images)
         compose.activity.setContent {
             current = remember { mutableStateOf(initial) }
             visible = remember { mutableStateOf(true) }

@@ -96,9 +96,9 @@ class ScrollToTopUiTest {
         verifyGridReturn()
         compose.onNodeWithTag("artistDateHeader:image0").assertIsDisplayed()
         compose.runOnIdle {
-            current.value = current.value.copy(mediaItems = sortArtistImages(images, MediaSort.NameAscending),
+            current.value = current.value.copy(
                 browseOptions = current.value.browseOptions.copy(imageLayout = ArtistImageLayout.Medium,
-                    artistImageSorts = mapOf("artist" to MediaSort.NameAscending)))
+                    artistImageSorts = mapOf("artist" to MediaSort.NameAscending))).withPreparedMedia(sortArtistImages(images, MediaSort.NameAscending))
         }
         verifyGridReturn()
         compose.onNodeWithTag("artistDate:image0").assertIsDisplayed()
@@ -197,10 +197,10 @@ class ScrollToTopUiTest {
         advance(64)
         val newKey = "artist:artist:Images:Large:NameDescending"
         compose.runOnIdle {
-            current.value = current.value.copy(mediaItems = sortArtistImages(images, MediaSort.NameDescending),
+            current.value = current.value.copy(
                 browseOptions = current.value.browseOptions.copy(imageLayout = ArtistImageLayout.Large,
                     artistImageSorts = mapOf("artist" to MediaSort.NameDescending)),
-                scrollPositions = current.value.scrollPositions + (newKey to GalleryScrollPosition(15, 0)))
+                scrollPositions = current.value.scrollPositions + (newKey to GalleryScrollPosition(15, 0))).withPreparedMedia(sortArtistImages(images, MediaSort.NameDescending))
         }
         frame()
         val restored = position("artistMediaList")
@@ -290,9 +290,9 @@ class ScrollToTopUiTest {
         assertEquals(GalleryScrollPosition(32, 0), value().scrollPositions["collection:collection0"])
         val customKey = "collection:collection0:SizeDescending"
         compose.runOnIdle {
-            current.value = current.value.copy(mediaItems = sortCollectionMedia(images, MediaSort.SizeDescending),
+            current.value = current.value.copy(
                 browseOptions = current.value.browseOptions.copy(collectionMediaSorts = mapOf("collection0" to MediaSort.SizeDescending)),
-                scrollPositions = current.value.scrollPositions + (customKey to GalleryScrollPosition(22, 0)))
+                scrollPositions = current.value.scrollPositions + (customKey to GalleryScrollPosition(22, 0))).withPreparedMedia(sortCollectionMedia(images, MediaSort.SizeDescending))
         }
         title("作品集 0").performTouchInput { doubleClick() }
         assertTop("collectionMediaList")
@@ -345,14 +345,14 @@ class ScrollToTopUiTest {
     @Test fun emptyTopAndLoadingOrFailedScreensHaveNoBusinessSideEffects() {
         show(homeState().copy(artists = emptyList()))
         title("画师").performTouchInput { doubleClick() }
-        compose.runOnIdle { current.value = artistState().copy(mediaItems = emptyList()) }
+        compose.runOnIdle { current.value = artistState().copy().withPreparedMedia(emptyList()) }
         title("画师样本").performTouchInput { doubleClick() }
         compose.onNodeWithText("还没有图片").assertIsDisplayed()
         compose.runOnIdle { current.value = current.value.copy(mediaLoadState = LoadState.Loading) }
         title("画师样本").performTouchInput { doubleClick() }
         compose.runOnIdle { current.value = current.value.copy(mediaLoadState = LoadState.Failed) }
         title("画师样本").performTouchInput { doubleClick() }
-        compose.runOnIdle { current.value = collectionState().copy(mediaItems = emptyList()) }
+        compose.runOnIdle { current.value = collectionState().copy().withPreparedMedia(emptyList()) }
         title("作品集 0").performTouchInput { doubleClick() }
         assertTop("collectionMediaList")
         assertTrue(businessEvents().isEmpty())
@@ -373,11 +373,11 @@ class ScrollToTopUiTest {
     private fun homeState() = GalleryUiState(loadState = LoadState.Ready, route = GalleryRoute.Home, artists = artists)
     private fun artistState(layout: ArtistImageLayout = ArtistImageLayout.List, sort: MediaSort = MediaSort.Default) = GalleryUiState(
         loadState = LoadState.Ready, mediaLoadState = LoadState.Ready, route = GalleryRoute.Artist("artist"), artistDetail = detail,
-        mediaItems = sortArtistImages(images, sort), browseOptions = BrowseOptions(imageLayout = layout, artistImageSorts = mapOf("artist" to sort), swipeDelete = false),
-    )
+         browseOptions = BrowseOptions(imageLayout = layout, artistImageSorts = mapOf("artist" to sort), swipeDelete = false),
+    ).withPreparedMedia(sortArtistImages(images, sort))
     private fun collectionState() = artistState().copy(route = GalleryRoute.Collection("collection0", "artist"), collection = collections.first())
     private fun homeDeep() {
-        compose.onNodeWithTag("artistRow:artist30").performScrollTo()
+        list("artistHomeList").performScrollToIndex(32)
         assertTrue(position("artistHomeList") > 0f)
     }
     private fun artistDeep(index: Int = 60) {

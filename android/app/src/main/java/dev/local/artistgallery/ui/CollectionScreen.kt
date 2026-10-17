@@ -23,15 +23,16 @@ import kotlinx.coroutines.launch
 @Composable
 fun CollectionScreen(state: GalleryUiState, padding: Dp, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit) {
     val collection = state.collection
+    val prepared = state.preparedMedia
     val loadState = if (state.loadState != LoadState.Ready) state.loadState else state.mediaLoadState
-    if (loadState != LoadState.Ready || collection == null) {
+    if (loadState != LoadState.Ready || collection == null || prepared == null) {
         Column(Modifier.fillMaxSize().padding(horizontal = padding, vertical = 20.dp)) {
             DDetailHeader(collection?.name.orEmpty(), { onEvent(GalleryEvent.OpenDialog(GalleryDialog.CollectionMenu)) }, { onEvent(GalleryEvent.NavigateBack) })
             dLoadState(loadState) { onEvent(GalleryEvent.RetryLoad) }
         }
         return
     }
-    val sort = state.browseOptions.collectionMediaSorts[collection.id] ?: MediaSort.Default
+    val sort = prepared.sort
     val scrollKey = "collection:${collection.id}" + if (sort == MediaSort.Default) "" else ":${sort.name}"
     key(scrollKey) {
         val position = state.scrollPositions[scrollKey] ?: GalleryScrollPosition()

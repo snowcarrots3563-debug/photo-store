@@ -28,6 +28,7 @@ class MediaImportSession(
     private val foregroundController: ImportWorkController? = null,
     private val awaitRecovery: suspend () -> Unit = {},
     private val onImportCompleted: (ImportCompletion) -> Unit = {},
+    private val nanoTime: () -> Long = System::nanoTime,
 ) {
     private val lock = Any()
     private val mutableState = MutableStateFlow(MediaImportSessionState())
@@ -68,16 +69,26 @@ class MediaImportSession(
             scope.launch(start = CoroutineStart.LAZY) {
                 var result: ImportBatchSummary? = null
                 var failure: String? = null
+                var publishedProgress: ImportProgress? = null
+                var publishedAt = 0L
                 try {
                     handle?.awaitForeground()
                     awaitRecovery()
                     val completed = block { progress ->
                         synchronized(lock) {
-                            if (state.value.attempt == attempt && isRunning) mutableState.value = state.value.copy(progress = progress)
+                            if (state.value.attempt != attempt || !isRunning) return@synchronized
+                            val now = nanoTime()
+                            val previous = publishedProgress
+                            if (previous != null && previous.batchId == progress.batchId && previous.currentItem == progress.currentItem &&
+                                previous.sourceName == progress.sourceName && previous.itemCount == progress.itemCount &&
+                                previous.completedItems == progress.completedItems && now - publishedAt < 250_000_000L) return@synchronized
+                            publishedProgress = progress
+                            publishedAt = now
+                            mutableState.value = state.value.copy(progress = progress)
+                            handle?.update(ImportWorkProgress(title, "${progress.sourceName} · ${progress.copiedBytes / 1024} KiB",
+                                completed = progress.completedItems.toLong(), total = progress.itemCount.toLong(),
+                                target = progress.batchId.takeIf(String::isNotBlank)?.let { ImportResultTarget(ImportResultKind.Media, it) }))
                         }
-                        handle?.update(ImportWorkProgress(title, "${progress.sourceName} · ${progress.copiedBytes / 1024} KiB",
-                            completed = progress.completedItems.toLong(), total = progress.itemCount.toLong(),
-                            target = progress.batchId.takeIf(String::isNotBlank)?.let { ImportResultTarget(ImportResultKind.Media, it) }))
                     }
                     result = completed
                     val completion = completed.toImportCompletion()

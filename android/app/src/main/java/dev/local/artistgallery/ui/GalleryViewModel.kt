@@ -21,15 +21,20 @@ import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.MediaSort
 import dev.local.artistgallery.model.sortArtistImages
 import dev.local.artistgallery.model.sortCollectionMedia
+import dev.local.artistgallery.model.buildArtistGridRows
 import dev.local.artistgallery.model.ReferenceRemovalResult
 import dev.local.artistgallery.model.SaveResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import java.util.UUID
+import java.time.ZoneId
 
 class GalleryViewModel(
     private val repository: GalleryRepository,
@@ -39,8 +44,10 @@ class GalleryViewModel(
     private val browsePreferences: dev.local.artistgallery.data.BrowsePreferences? = null,
     private val onImportCompleted: (ImportCompletion) -> Unit = {},
     mediaImportSession: MediaImportSession? = null,
+    private val computationDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : ViewModel() {
     private var persistedBrowseOptions = browsePreferences?.options?.value ?: BrowseOptions()
+    private var gridZoneId = ZoneId.systemDefault()
     private val mutableState = MutableStateFlow(restore().let { it.copy(browseOptions = displayOptions(it.route)) })
     val state: StateFlow<GalleryUiState> = mutableState.asStateFlow()
     private val messages = MutableSharedFlow<GalleryFeedback>(extraBufferCapacity = 1)
@@ -51,6 +58,15 @@ class GalleryViewModel(
     private var homeLoadState = LoadState.Loading
     private var detailJob: Job? = null
     private var mediaJob: Job? = null
+    private var mediaPreparationJob: Job? = null
+    private var parentPreparationJob: Job? = null
+    private var routeEpoch = 0L
+    private var mediaRequest = 0L
+    private var parentEpoch = 0L
+    private var parentRequest = 0L
+    private data class RawMedia(val route: GalleryRoute, val items: List<MediaAssetSummary>, val removedIds: Set<String> = emptySet())
+    private var rawMedia: RawMedia? = null
+    private data class MediaConfiguration(val sort: MediaSort, val layout: ArtistImageLayout, val zoneId: ZoneId)
     private var galleryQueriesPaused = false
     private var resumeArtistsAfterPause = false
     private val importSession = mediaImportSession ?: mediaImporter?.let { importer ->
@@ -61,10 +77,12 @@ class GalleryViewModel(
     private var observedImportAttempt: Long? = null
     private var importPreviewJob: Job? = null
     private var importResultJob: Job? = null
+    private val importResultObservationRetry = MutableStateFlow(0L)
     private var pendingImportResultId: String? = null
     private var importPreviewId: String? = if (state.value.dialog == GalleryDialog.ImportPreview && state.value.importCandidates.isNotEmpty()) UUID.randomUUID().toString() else null
     private var coverJob: Job? = null
-    private data class ArtistReturnState(val id: String, val detail: ArtistDetail, val images: List<MediaAssetSummary>, val tab: ArtistTab)
+    private data class ArtistReturnState(val id: String, val detail: ArtistDetail, val presentation: PreparedMedia, val tab: ArtistTab,
+        val removedIds: Set<String> = emptySet())
     private var parentArtist: ArtistReturnState? = null
 
     init {
@@ -72,6 +90,7 @@ class GalleryViewModel(
         observeArtists()
         observeRoute()
         observeImportHistory()
+        observeImportResult()
         observeMediaImport()
         (state.value.dialog as? GalleryDialog.ArtistCover)?.let { loadCoverImages(it.artistId) }
         ((state.value.dialog as? GalleryDialog.ImportTarget)?.artistId
@@ -226,21 +245,107 @@ class GalleryViewModel(
         orderedEntities(detail.collections, persistedBrowseOptions.collectionOrders[detail.artist.id].orEmpty()) { it.id })
 
     private fun applyBrowseOptions(options: BrowseOptions) {
-        val previousSorts = persistedBrowseOptions.artistImageSorts
-        val previousCollectionSorts = persistedBrowseOptions.collectionMediaSorts
+        val route = state.value.route
+        val previousConfiguration = mediaConfiguration(route)
+        val parentRoute = parentArtist?.let { GalleryRoute.Artist(it.id) }
+        val previousParentConfiguration = parentRoute?.let(::mediaConfiguration)
         persistedBrowseOptions = options
-        parentArtist = parentArtist?.let { cached -> cached.copy(detail = requireNotNull(orderedDetail(cached.detail)),
-            images = if (previousSorts[cached.id] != options.artistImageSorts[cached.id])
-                sortArtistImages(cached.images, options.artistImageSorts[cached.id] ?: MediaSort.Default) else cached.images) }
+        parentArtist = parentArtist?.let { cached -> cached.copy(detail = requireNotNull(orderedDetail(cached.detail))) }
         changeTransient { it.copy(browseOptions = displayOptions(it.route),
-            artists = orderedEntities(it.artists, options.artistOrder) { artist -> artist.id }, artistDetail = orderedDetail(it.artistDetail),
-            mediaItems = when (val route = it.route) {
-                is GalleryRoute.Artist -> if (previousSorts[route.id] != options.artistImageSorts[route.id])
-                    sortArtistImages(it.mediaItems, options.artistImageSorts[route.id] ?: MediaSort.Default) else it.mediaItems
-                is GalleryRoute.Collection -> if (previousCollectionSorts[route.id] != options.collectionMediaSorts[route.id])
-                    sortCollectionMedia(it.mediaItems, options.collectionMediaSorts[route.id] ?: MediaSort.Default) else it.mediaItems
-                else -> it.mediaItems
-            }) }
+            artists = orderedEntities(it.artists, options.artistOrder) { artist -> artist.id }, artistDetail = orderedDetail(it.artistDetail)) }
+        if (previousConfiguration != mediaConfiguration(route)) prepareActiveMedia()
+        if (parentRoute != null && previousParentConfiguration != mediaConfiguration(parentRoute)) prepareParentMedia()
+    }
+
+    private fun mediaConfiguration(route: GalleryRoute): MediaConfiguration = MediaConfiguration(
+        when (route) {
+            is GalleryRoute.Artist -> persistedBrowseOptions.artistImageSorts[route.id] ?: MediaSort.Default
+            is GalleryRoute.Collection -> persistedBrowseOptions.collectionMediaSorts[route.id] ?: MediaSort.Default
+            else -> MediaSort.Default
+        },
+        if (route is GalleryRoute.Artist) displayOptions(route).imageLayout else ArtistImageLayout.List,
+        gridZoneId,
+    )
+
+    private fun PreparedMedia.matches(configuration: MediaConfiguration): Boolean =
+        sort == configuration.sort && layout == configuration.layout && zoneId == configuration.zoneId
+
+    private suspend fun prepareMedia(route: GalleryRoute, items: List<MediaAssetSummary>, configuration: MediaConfiguration,
+        removedIds: Set<String> = emptySet(), previous: PreparedMedia? = null): Pair<PreparedMedia, Set<String>> =
+        withContext(computationDispatcher) {
+            currentCoroutineContext().ensureActive()
+            val remaining = if (removedIds.isEmpty()) items else items.filterNot { it.id in removedIds }
+            val sorted = when (route) {
+                is GalleryRoute.Artist -> sortArtistImages(remaining, configuration.sort)
+                is GalleryRoute.Collection -> sortCollectionMedia(remaining, configuration.sort)
+                else -> remaining
+            }
+            val ids = sorted.mapTo(mutableSetOf()) { it.id }
+            if (previous != null && previous.matches(configuration) && previous.items == sorted) {
+                currentCoroutineContext().ensureActive()
+                return@withContext previous to ids
+            }
+            val rows = if (route is GalleryRoute.Artist && configuration.layout != ArtistImageLayout.List)
+                buildArtistGridRows(sorted, configuration.sort, configuration.layout.columns, configuration.zoneId) else emptyList()
+            currentCoroutineContext().ensureActive()
+            PreparedMedia(sorted, configuration.sort, configuration.layout, configuration.zoneId, rows) to ids
+        }
+
+    private fun cancelMediaPreparation() {
+        mediaRequest++
+        mediaPreparationJob?.cancel()
+    }
+
+    private fun prepareActiveMedia() {
+        if (galleryQueriesPaused) return
+        val route = state.value.route
+        val source = rawMedia?.takeIf { it.route == route } ?: return
+        cancelMediaPreparation()
+        val request = mediaRequest
+        val epoch = routeEpoch
+        val configuration = mediaConfiguration(route)
+        val previous = state.value.preparedMedia
+        mediaPreparationJob = viewModelScope.launch {
+            try {
+                val (prepared, ids) = prepareMedia(route, source.items, configuration, source.removedIds, previous)
+                currentCoroutineContext().ensureActive()
+                if (routeEpoch != epoch || mediaRequest != request || state.value.route != route ||
+                    mediaConfiguration(route) != configuration || galleryQueriesPaused) return@launch
+                change { current -> current.copy(preparedMedia = prepared,
+                    selectedMediaIds = current.selectedMediaIds.intersect(ids), mediaLoadState = LoadState.Ready,
+                    loadState = if (route == GalleryRoute.Unassigned) LoadState.Ready else current.loadState) }
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (routeEpoch == epoch && mediaRequest == request && state.value.route == route)
+                    change { it.copy(loadState = LoadState.Failed, mediaLoadState = LoadState.Failed) }
+            }
+        }
+    }
+
+    private fun prepareParentMedia() {
+        if (galleryQueriesPaused) return
+        val cached = parentArtist ?: return
+        val route = GalleryRoute.Artist(cached.id)
+        val configuration = mediaConfiguration(route)
+        parentPreparationJob?.cancel()
+        val request = ++parentRequest
+        val epoch = parentEpoch
+        parentPreparationJob = viewModelScope.launch {
+            val (prepared, _) = prepareMedia(route, cached.presentation.items, configuration, cached.removedIds, cached.presentation)
+            currentCoroutineContext().ensureActive()
+            val current = parentArtist
+            if (parentEpoch == epoch && parentRequest == request && current != null && current.id == cached.id &&
+                current.presentation === cached.presentation && mediaConfiguration(route) == configuration && !galleryQueriesPaused)
+                parentArtist = current.copy(presentation = prepared, removedIds = emptySet())
+        }
+    }
+
+    internal fun setGridZoneId(zoneId: ZoneId) {
+        if (gridZoneId == zoneId) return
+        gridZoneId = zoneId
+        if (state.value.route is GalleryRoute.Artist) prepareActiveMedia()
+        prepareParentMedia()
     }
 
     private fun saveBrowseOptions(options: BrowseOptions) {
@@ -303,11 +408,18 @@ class GalleryViewModel(
             artistsJob?.cancel()
             detailJob?.cancel()
             mediaJob?.cancel()
+            routeEpoch++
+            cancelMediaPreparation()
+            parentRequest++
+            parentPreparationJob?.cancel()
         } else {
             val resumeArtists = resumeArtistsAfterPause
             resumeArtistsAfterPause = false
             if (resumeArtists) observeArtists()
             observeRoute()
+            parentArtist?.let { cached ->
+                if (!cached.presentation.matches(mediaConfiguration(GalleryRoute.Artist(cached.id))) || cached.removedIds.isNotEmpty()) prepareParentMedia()
+            }
         }
     }
 
@@ -334,8 +446,12 @@ class GalleryViewModel(
     private fun observeRoute() {
         detailJob?.cancel()
         mediaJob?.cancel()
+        routeEpoch++
+        cancelMediaPreparation()
         if (galleryQueriesPaused) return
         val route = state.value.route
+        if (rawMedia?.route != route) rawMedia = null
+        if (rawMedia != null && (state.value.preparedMedia?.matches(mediaConfiguration(route)) != true || rawMedia!!.removedIds.isNotEmpty())) prepareActiveMedia()
         observeMediaRoute(route)
         if (route == GalleryRoute.Home) {
             change { it.copy(loadState = homeLoadState) }
@@ -391,28 +507,24 @@ class GalleryViewModel(
             route == GalleryRoute.Unassigned -> mediaRepository.observeUnassignedMedia()
             else -> null
         } ?: run {
-            change { it.copy(mediaItems = emptyList(), selectedMediaIds = emptySet(), mediaLoadState = LoadState.Ready) }
+            val configuration = mediaConfiguration(route)
+            change { it.copy(preparedMedia = PreparedMedia(emptyList(), configuration.sort, configuration.layout, configuration.zoneId, emptyList()),
+                selectedMediaIds = emptySet(), mediaLoadState = LoadState.Ready) }
             return
         }
+        val epoch = routeEpoch
         mediaJob = viewModelScope.launch {
             source.catch { error ->
                 if (error is CancellationException) throw error
                 currentCoroutineContext().ensureActive()
-                if (state.value.route != route) return@catch
+                if (state.value.route != route || routeEpoch != epoch) return@catch
+                cancelMediaPreparation()
                 change { it.copy(loadState = LoadState.Failed, mediaLoadState = LoadState.Failed) }
             }.collect { items ->
                 currentCoroutineContext().ensureActive()
-                if (state.value.route != route) return@collect
-                change { current ->
-                    val ids = items.mapTo(mutableSetOf()) { it.id }
-                    current.copy(mediaItems = when (route) {
-                        is GalleryRoute.Artist -> sortArtistImages(items, persistedBrowseOptions.artistImageSorts[route.id] ?: MediaSort.Default)
-                        is GalleryRoute.Collection -> sortCollectionMedia(items, persistedBrowseOptions.collectionMediaSorts[route.id] ?: MediaSort.Default)
-                        else -> items
-                    },
-                        selectedMediaIds = current.selectedMediaIds.intersect(ids), mediaLoadState = LoadState.Ready,
-                        loadState = if (route == GalleryRoute.Unassigned) LoadState.Ready else current.loadState)
-                }
+                if (state.value.route != route || routeEpoch != epoch) return@collect
+                rawMedia = RawMedia(route, items, rawMedia?.takeIf { it.route == route }?.removedIds.orEmpty())
+                prepareActiveMedia()
             }
         }
     }
@@ -427,19 +539,25 @@ class GalleryViewModel(
             current.route.artistId == route.id) {
             parentArtist?.takeIf { it.id == route.id }
         } else null
+        val parentPresentation = parent?.takeIf { it.removedIds.isEmpty() }?.presentation
+        parentEpoch++
+        parentRequest++
+        parentPreparationJob?.cancel()
         parentArtist = if (route is GalleryRoute.Collection && current.route is GalleryRoute.Artist &&
             current.route.id == route.artistId && current.loadState == LoadState.Ready && current.mediaLoadState == LoadState.Ready) {
-            current.artistDetail?.takeIf { it.artist.id == route.artistId }?.let {
-                ArtistReturnState(route.artistId, it, current.mediaItems, current.artistTab)
+            current.artistDetail?.takeIf { it.artist.id == route.artistId }?.let { detail -> current.preparedMedia?.let {
+                ArtistReturnState(route.artistId, detail, it, current.artistTab)
+            }
             }
         } else null
+        rawMedia = parent?.let { RawMedia(route, it.presentation.items, it.removedIds) }
         val comicDirection = if (route is GalleryRoute.Collection && savedState.get<String>("comicDirection:${route.id}") == ComicDirection.NameDescending.name)
             ComicDirection.NameDescending else ComicDirection.NameAscending
         change { it.copy(route = route, overlay = GalleryOverlay.None, comicDirection = comicDirection, artistTab = parent?.tab ?: tab,
             dialog = GalleryDialog.None, fieldError = null, loadState = if (route == GalleryRoute.Home) homeLoadState else if (parent == null) LoadState.Loading else LoadState.Ready,
-            mediaLoadState = if (parent == null) LoadState.Loading else LoadState.Ready,
+            mediaLoadState = if (parentPresentation == null) LoadState.Loading else LoadState.Ready,
             artistDetail = parent?.let { cached -> current.artistDetail?.takeIf { it.artist.id == cached.id } ?: cached.detail }, collection = null,
-            mediaItems = parent?.images ?: emptyList(), selectedMediaIds = emptySet(), mediaSelectionMode = false,
+            preparedMedia = parentPresentation, selectedMediaIds = emptySet(), mediaSelectionMode = false,
             entitySelectionKind = null, selectedEntityIds = emptySet(), browseOptions = displayOptions(route),
             pendingAddAssetIds = emptyList(), importCandidates = emptyList(), importResult = null,
             pendingImportTargetCollectionId = if (importSession?.isRunning == true) it.pendingImportTargetCollectionId else null,
@@ -750,7 +868,11 @@ class GalleryViewModel(
                 val batch = media.getImportBatchResult(batchId)
                 currentCoroutineContext().ensureActive()
                 if (batch == null) messages.emit(GalleryFeedback.Saved("导入记录不存在。"))
-                else change { it.copy(importResult = batch, dialog = GalleryDialog.ImportResult(batchId), overlay = GalleryOverlay.None) }
+                else {
+                    val reopening = state.value.dialog == GalleryDialog.ImportResult(batchId)
+                    change { it.copy(importResult = batch, dialog = GalleryDialog.ImportResult(batchId), overlay = GalleryOverlay.None) }
+                    if (reopening) importResultObservationRetry.update { it + 1 }
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { messages.emit(GalleryFeedback.Saved(error.message ?: "读取导入记录失败。")) }
         }
@@ -818,11 +940,37 @@ class GalleryViewModel(
         val media = mediaRepository ?: return
         viewModelScope.launch {
             media.observeLatestImportBatches()
+                .distinctUntilChanged()
                 .catch { error -> if (error is CancellationException) throw error }
-                .collect { batches -> changeTransient { current ->
-                    val result = current.importResult?.let { old -> batches.firstOrNull { it.id == old.id } ?: old }
-                    current.copy(recentImportBatches = batches, importResult = result)
-                } }
+                .collect { batches -> changeTransient { it.copy(recentImportBatches = batches) } }
+        }
+    }
+
+    private fun observeImportResult() {
+        val media = mediaRepository ?: return
+        viewModelScope.launch {
+            combine(state.map { (it.dialog as? GalleryDialog.ImportResult)?.batchId }.distinctUntilChanged(),
+                importResultObservationRetry) { batchId, retry -> batchId to retry }
+                .collectLatest { (batchId, retry) ->
+                    if (batchId == null) return@collectLatest
+                    val observationContext = currentCoroutineContext()
+                    try {
+                        media.observeImportBatchResult(batchId).distinctUntilChanged().collect { batch ->
+                            observationContext.ensureActive()
+                            if (state.value.dialog != GalleryDialog.ImportResult(batchId) || importResultObservationRetry.value != retry) return@collect
+                            if (batch == null) messages.emit(GalleryFeedback.Saved("导入记录不存在。"))
+                            else changeTransient { current ->
+                                if (current.dialog == GalleryDialog.ImportResult(batchId) && importResultObservationRetry.value == retry)
+                                    current.copy(importResult = batch) else current
+                            }
+                        }
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) {
+                        observationContext.ensureActive()
+                        if (state.value.dialog == GalleryDialog.ImportResult(batchId) && importResultObservationRetry.value == retry)
+                            messages.emit(GalleryFeedback.Saved(error.message ?: "读取导入记录失败。"))
+                    }
+                }
         }
     }
 
@@ -1002,13 +1150,28 @@ class GalleryViewModel(
                 keepRemaining(if (bulk) "已删除 $completed 个副本，${remaining.size} 个未完成，请重试；中断的副本清理会在下次启动时恢复。"
                     else "删除未完成，请重试；中断任务会在下次启动时恢复。")
             }
-            finally { change { it.copy(isSaving = false) } }
+            finally { finishMediaDeletion() }
         }
     }
 
     private fun removeCachedImages(ids: Set<String>) {
         if (ids.isEmpty()) return
-        parentArtist = parentArtist?.let { cached -> cached.copy(images = cached.images.filterNot { it.id in ids }) }
+        rawMedia = rawMedia?.let { it.copy(removedIds = it.removedIds + ids) }
+        prepareActiveMedia()
+        parentArtist = parentArtist?.let { cached -> cached.copy(removedIds = cached.removedIds + ids) }
+        prepareParentMedia()
+    }
+
+    private suspend fun finishMediaDeletion() {
+        try {
+            while (true) {
+                val parent = parentPreparationJob
+                val active = mediaPreparationJob
+                parent?.join()
+                active?.join()
+                if (parentPreparationJob === parent && mediaPreparationJob === active) break
+            }
+        } finally { change { it.copy(isSaving = false) } }
     }
 
     private fun forgetEntity(kind: EntitySelectionKind, id: String) {
@@ -1074,7 +1237,7 @@ class GalleryViewModel(
                 throw cancelled
             } catch (_: Exception) {
                 keepRemaining("已删除 $completed 项，${remaining.size} 项未完成，请重试；中断的副本清理会在下次启动时恢复。")
-            } finally { change { it.copy(isSaving = false) } }
+            } finally { finishMediaDeletion() }
         }
     }
 
@@ -1102,7 +1265,7 @@ class GalleryViewModel(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
                 change { it.copy(fieldError = "删除未完成，画师已保留，请重试；已删除内容不会恢复，中断的副本清理会在下次启动时继续。") }
-            } finally { change { it.copy(isSaving = false) } }
+            } finally { finishMediaDeletion() }
         }
     }
 

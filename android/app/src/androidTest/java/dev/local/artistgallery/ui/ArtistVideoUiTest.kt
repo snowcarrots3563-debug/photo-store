@@ -143,7 +143,7 @@ class ArtistVideoUiTest {
         val collection = CollectionSummary("collection", "artist", "作品集样本", false, imageCount, videoCount)
         return GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
             route = GalleryRoute.Artist("artist"), artistDetail = ArtistDetail(ArtistSummary("artist", "画师样本", 1, imageCount, videoCount = videoCount), listOf(collection)),
-            mediaItems = sortArtistImages(items, sort), browseOptions = BrowseOptions(imageLayout = layout, swipeDelete = false, artistImageSorts = mapOf("artist" to sort)))
+             browseOptions = BrowseOptions(imageLayout = layout, swipeDelete = false, artistImageSorts = mapOf("artist" to sort))).withPreparedMedia(sortArtistImages(items, sort))
     }
 
     private fun show(state: GalleryUiState = initial()) {
@@ -155,8 +155,8 @@ class ArtistVideoUiTest {
                 current.value = when (event) {
                     is GalleryEvent.OpenDialog -> old.copy(dialog = event.dialog)
                     GalleryEvent.DismissDialog -> old.copy(dialog = GalleryDialog.None)
-                    is GalleryEvent.SetArtistImageSort -> old.copy(dialog = GalleryDialog.None, mediaItems = sortArtistImages(old.mediaItems, event.sort),
-                        browseOptions = old.browseOptions.copy(artistImageSorts = mapOf("artist" to event.sort)))
+                    is GalleryEvent.SetArtistImageSort -> old.copy(dialog = GalleryDialog.None,
+                        browseOptions = old.browseOptions.copy(artistImageSorts = mapOf("artist" to event.sort))).withPreparedMedia(sortArtistImages(old.mediaItems, event.sort))
                     is GalleryEvent.OpenMedia -> if (old.mediaSelectionMode) old else old.copy(overlay = GalleryOverlay.VideoPlayer(event.assetId))
                     GalleryEvent.CloseOverlay -> old.copy(overlay = GalleryOverlay.None)
                     is GalleryEvent.StartMediaSelection -> old.copy(mediaSelectionMode = true, selectedMediaIds = setOf(event.assetId))

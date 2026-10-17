@@ -138,7 +138,7 @@ class ViewerZoomUiTest {
             var selected by remember { mutableStateOf(initial) }
             options = remember { mutableStateOf(BrowseOptions(cardEffects = cardEffects)) }
             DTheme {
-                ImageViewerScreen(GalleryUiState(mediaItems = images, browseOptions = options.value), selected, null) { event ->
+                ImageViewerScreen(GalleryUiState( browseOptions = options.value).withPreparedMedia(images), selected, null) { event ->
                     events.add(event)
                     when (event) {
                         is GalleryEvent.OpenMedia -> selected = event.assetId

@@ -98,9 +98,9 @@ class ArtistPageUiTest {
 
     private fun artistState(layout: ArtistImageLayout = ArtistImageLayout.List) = GalleryUiState(
         loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-        route = GalleryRoute.Artist("artist"), artistDetail = detail, mediaItems = images,
+        route = GalleryRoute.Artist("artist"), artistDetail = detail,
         browseOptions = BrowseOptions(imageLayout = layout),
-    )
+    ).withPreparedMedia(images)
 
     private fun savedPosition(key: String): GalleryScrollPosition {
         lateinit var position: GalleryScrollPosition
@@ -110,13 +110,13 @@ class ArtistPageUiTest {
 
     private fun restoreAfterLoading(listTag: String) {
         compose.runOnIdle {
-            current.value = current.value.copy(loadState = LoadState.Loading, mediaLoadState = LoadState.Loading, mediaItems = emptyList())
+            current.value = current.value.copy(loadState = LoadState.Loading, mediaLoadState = LoadState.Loading, ).withPreparedMedia(emptyList())
             visible.value = true
         }
         compose.onNodeWithTag(listTag).assertDoesNotExist()
         compose.runOnIdle { current.value = current.value.copy(loadState = LoadState.Ready) }
         compose.onNodeWithTag(listTag).assertDoesNotExist()
-        compose.runOnIdle { current.value = current.value.copy(mediaLoadState = LoadState.Ready, mediaItems = images) }
+        compose.runOnIdle { current.value = current.value.copy(mediaLoadState = LoadState.Ready, ).withPreparedMedia(images) }
         compose.onNodeWithTag(listTag).assertExists()
     }
 

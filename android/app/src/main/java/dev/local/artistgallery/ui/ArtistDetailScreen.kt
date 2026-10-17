@@ -16,7 +16,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.input.pointer.pointerInput
@@ -26,7 +25,6 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.unit.IntOffset
 import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.MediaSort
-import dev.local.artistgallery.model.buildArtistGridRows
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,23 +53,23 @@ import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.model.SampleCoverKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import java.time.ZoneId
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Composable (SampleCoverKey) -> Unit)?, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit) {
     val detail = state.artistDetail
+    val prepared = state.preparedMedia
     val loadState = if (state.loadState != LoadState.Ready) state.loadState else state.mediaLoadState
     // An empty loading list would clamp a restored item index to zero.
-    if (loadState != LoadState.Ready || detail == null) {
+    if (loadState != LoadState.Ready || detail == null || prepared == null) {
         Column(Modifier.fillMaxSize().padding(horizontal = padding, vertical = 20.dp)) {
             DDetailHeader(detail?.artist?.name.orEmpty(), { onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistMenu)) }, { onEvent(GalleryEvent.NavigateBack) })
             dLoadState(loadState) { onEvent(GalleryEvent.RetryLoad) }
         }
         return
     }
-    val imageSort = state.browseOptions.artistImageSorts[detail.artist.id] ?: MediaSort.Default
-    val scrollKey = "artist:${detail.artist.id}:${state.artistTab}:${state.browseOptions.imageLayout.name}" +
+    val imageSort = prepared.sort
+    val scrollKey = "artist:${detail.artist.id}:${state.artistTab}:${prepared.layout.name}" +
         if (state.artistTab == ArtistTab.Images) ":${imageSort.name}" else ""
     key(scrollKey) {
         val position = state.scrollPositions[scrollKey] ?: GalleryScrollPosition()
@@ -116,14 +114,12 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
         val artist = detail.artist
         val mediaLabel = if (artist.videoCount > 0) "全部媒体" else "全部图片"
         val selectingCollections = state.entitySelectionKind == EntitySelectionKind.Collections
-        val reorder = rememberReorderRows(detail.collections.map { it.id }, state.artistTab == ArtistTab.Collections && selectingCollections && !state.isSaving, { listState.scrollBy(it) })
-        val collectionsById = detail.collections.associateBy { it.id }
+        val collectionIds = remember(detail.collections) { detail.collections.map { it.id } }
+        val reorder = rememberReorderRows(collectionIds, state.artistTab == ArtistTab.Collections && selectingCollections && !state.isSaving, listState)
+        val collectionsById = remember(detail.collections) { detail.collections.associateBy { it.id } }
         val commitOrder = { ids: List<String> -> onEvent(GalleryEvent.ReorderCollections(artist.id, ids)) }
-        val columns = state.browseOptions.imageLayout.columns
-        val gridRows = if (state.artistTab == ArtistTab.Images && state.browseOptions.imageLayout != ArtistImageLayout.List) {
-            val zoneId = ZoneId.systemDefault()
-            remember(state.mediaItems, imageSort, columns, zoneId) { buildArtistGridRows(state.mediaItems, imageSort, columns, zoneId) }
-        } else emptyList()
+        val columns = prepared.layout.columns
+        val gridRows = prepared.gridRows
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxWidth().padding(start = padding, end = padding, top = 20.dp)) {
                 Column(Modifier.fillMaxWidth().testTag("artistHeader")) {
@@ -179,7 +175,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                         val defaultName = detail.collections.firstOrNull { it.isDefault }?.name ?: "默认图集"
                         DEmpty("还没有图片", "导入到$defaultName，也可以选择其他作品集。", "导入") { onEvent(GalleryEvent.OpenDialog(GalleryDialog.AddMenu)) }
                     }
-                    else if (state.browseOptions.imageLayout == ArtistImageLayout.List) itemsIndexed(state.mediaItems, key = { _, media -> media.id }) { index, media ->
+                    else if (prepared.layout == ArtistImageLayout.List) itemsIndexed(state.mediaItems, key = { _, media -> media.id }) { index, media ->
                         if (index > 0) Spacer(Modifier.height(8.dp))
                         if (state.mediaSelectionMode) {
                             Box(Modifier.testTag("artistSelectedRow:${media.id}")) {
@@ -232,37 +228,35 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                             }
                         }
                     }
-                } else item {
-                    if (detail.collections.isEmpty()) DEmpty("还没有作品集", "名称可以稍后再想。", "先创建一个") { onEvent(GalleryEvent.OpenDialog(GalleryDialog.CreateCollection(artist.id))) }
-                    else DGroup { reorder.order.mapNotNull { collectionsById[it] }.forEachIndexed { index, c ->
-                        key(c.id) {
-                            val isSelected = c.id in state.selectedEntityIds
-                            ReorderRow(reorder, c.id, Modifier.testTag("collectionRow:${c.id}").semantics {
-                                if (selectingCollections && !c.isDefault) {
-                                    selected = isSelected
-                                    toggleableState = if (isSelected) ToggleableState.On else ToggleableState.Off
-                                }
-                            }) {
-                                Column {
-                                    if (index > 0) DDivider()
-                                    DRow(c.name, "${c.imageCount} 张图片" + if (c.videoCount > 0) " · ${c.videoCount} 个视频" else "", cover = c.cover, fixtureCover = fixtureCover, previewDecoder = previewDecoder,
-                                        onLongClick = if (c.isDefault || selectingCollections || state.isSaving) null else ({ onEvent(GalleryEvent.StartEntitySelection(EntitySelectionKind.Collections, c.id)) }),
-                                        trailing = if (selectingCollections) ({
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Checkbox(!c.isDefault && c.id in state.selectedEntityIds, onCheckedChange = null, enabled = !c.isDefault && !state.isSaving,
-                                                    modifier = Modifier.testTag("collectionCheckbox:${c.id}").semantics { if (c.isDefault) disabled() })
-                                                ReorderHandle(reorder, c.id, c.name, !state.isSaving, commitOrder)
-                                            }
-                                        }) else null) {
-                                        if (!state.isSaving) {
-                                            if (selectingCollections && !c.isDefault) onEvent(GalleryEvent.ToggleEntitySelection(c.id))
-                                            else { rememberPosition(); onEvent(GalleryEvent.OpenCollection(c.id, c.artistId)) }
-                                        }
+                } else if (detail.collections.isEmpty()) item {
+                    DEmpty("还没有作品集", "名称可以稍后再想。", "先创建一个") { onEvent(GalleryEvent.OpenDialog(GalleryDialog.CreateCollection(artist.id))) }
+                } else itemsIndexed(reorder.order, key = { _, id -> "collection:$id" }) { index, id ->
+                    val c = collectionsById[id] ?: return@itemsIndexed
+                    val isSelected = c.id in state.selectedEntityIds
+                    ReorderRow(reorder, c.id, Modifier.testTag("collectionRow:${c.id}").semantics {
+                        if (selectingCollections && !c.isDefault) {
+                            selected = isSelected
+                            toggleableState = if (isSelected) ToggleableState.On else ToggleableState.Off
+                        }
+                    }) {
+                        DGroupRow(index == 0, index == reorder.order.lastIndex) {
+                            if (index > 0) DDivider()
+                            DRow(c.name, "${c.imageCount} 张图片" + if (c.videoCount > 0) " · ${c.videoCount} 个视频" else "", cover = c.cover, fixtureCover = fixtureCover, previewDecoder = previewDecoder,
+                                onLongClick = if (c.isDefault || selectingCollections || state.isSaving) null else ({ onEvent(GalleryEvent.StartEntitySelection(EntitySelectionKind.Collections, c.id)) }),
+                                trailing = if (selectingCollections) ({
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(!c.isDefault && c.id in state.selectedEntityIds, onCheckedChange = null, enabled = !c.isDefault && !state.isSaving,
+                                            modifier = Modifier.testTag("collectionCheckbox:${c.id}").semantics { if (c.isDefault) disabled() })
+                                        ReorderHandle(reorder, c.id, c.name, !state.isSaving, commitOrder)
                                     }
+                                }) else null) {
+                                if (!state.isSaving) {
+                                    if (selectingCollections && !c.isDefault) onEvent(GalleryEvent.ToggleEntitySelection(c.id))
+                                    else { rememberPosition(); onEvent(GalleryEvent.OpenCollection(c.id, c.artistId)) }
                                 }
                             }
                         }
-                    } }
+                    }
                 }
             }
         }

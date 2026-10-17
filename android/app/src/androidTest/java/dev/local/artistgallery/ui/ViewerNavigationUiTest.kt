@@ -116,7 +116,7 @@ class ViewerNavigationUiTest {
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
             var selected by remember { mutableStateOf(initial) }
             DTheme { ImageViewerScreen(
-                GalleryUiState(mediaItems = images, browseOptions = BrowseOptions(cardEffects, false)), selected, null,
+                GalleryUiState( browseOptions = BrowseOptions(cardEffects, false)).withPreparedMedia(images), selected, null,
             ) { event ->
                 events.add(event)
                 when (event) {

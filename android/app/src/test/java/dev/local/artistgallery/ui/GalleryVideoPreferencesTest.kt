@@ -82,7 +82,7 @@ class GalleryVideoPreferencesTest {
         override suspend fun renameArtist(id: String, name: String): SaveResult = error("Preferences must not write gallery")
         override suspend fun createCollection(artistId: String, name: String): SaveResult = error("Preferences must not write gallery")
         override suspend fun renameCollection(id: String, name: String): SaveResult = error("Preferences must not write gallery")
-    }, SavedStateHandle(), browsePreferences = prefs).also { store.put("video${serial++}", it) }
+    }, SavedStateHandle(), browsePreferences = prefs, computationDispatcher = dispatcher).also { store.put("video${serial++}", it) }
 
     private class Preferences(initial: BrowseOptions) : BrowsePreferences {
         override val options = MutableStateFlow(initial)

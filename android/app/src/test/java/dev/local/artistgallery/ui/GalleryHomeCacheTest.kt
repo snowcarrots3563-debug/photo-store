@@ -26,7 +26,7 @@ class GalleryHomeCacheTest {
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
 
     private fun model(repo: HomeRepository, handle: SavedStateHandle = SavedStateHandle(), preferences: BrowsePreferences? = null): GalleryViewModel =
-        GalleryViewModel(repo, handle, browsePreferences = preferences).also { store.put("home${serial++}", it) }
+        GalleryViewModel(repo, handle, browsePreferences = preferences, computationDispatcher = dispatcher).also { store.put("home${serial++}", it) }
 
     @Test fun returningFromArtistCollectionAndManageImmediatelyReusesHomeListWithoutNewSubscription() = runTest(dispatcher) {
         val repo = HomeRepository(listOf(artist("a"), artist("b")))

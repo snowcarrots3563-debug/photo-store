@@ -108,7 +108,7 @@ class ArtistSortUiTest {
     }
 
     private fun initial() = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-        route = GalleryRoute.Artist("artist"), artistDetail = detail, mediaItems = sortArtistImages(images, MediaSort.Default))
+        route = GalleryRoute.Artist("artist"), artistDetail = detail, ).withPreparedMedia(sortArtistImages(images, MediaSort.Default))
 
     private fun show(state: GalleryUiState = initial()) {
         compose.activity.setContent {
@@ -120,8 +120,8 @@ class ArtistSortUiTest {
                     is GalleryEvent.OpenDialog -> old.copy(dialog = event.dialog)
                     GalleryEvent.DismissDialog -> old.copy(dialog = GalleryDialog.None)
                     is GalleryEvent.SetArtistImageSort -> old.copy(dialog = GalleryDialog.None,
-                        mediaItems = sortArtistImages(images, event.sort),
-                        browseOptions = old.browseOptions.copy(artistImageSorts = old.browseOptions.artistImageSorts + ("artist" to event.sort)))
+
+                        browseOptions = old.browseOptions.copy(artistImageSorts = old.browseOptions.artistImageSorts + ("artist" to event.sort))).withPreparedMedia(sortArtistImages(images, event.sort))
                     is GalleryEvent.RememberScrollPosition -> old.copy(scrollPositions = old.scrollPositions +
                         (event.key to GalleryScrollPosition(event.index, event.offset)))
                     else -> old

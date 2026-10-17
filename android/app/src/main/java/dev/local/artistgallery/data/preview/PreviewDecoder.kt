@@ -43,6 +43,7 @@ class PreviewDecoder(
         override fun sizeOf(key: ThumbnailKey, value: Bitmap): Int = value.allocationByteCount
     }
     private val thumbnailDecodes = Semaphore(2)
+    private val largeDecodes = PreviewDecodeGate()
 
     fun cachedThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int, type: MediaType = MediaType.IMAGE): Bitmap? =
         thumbnailCache.get(ThumbnailKey(storageKey, targetWidthPx, targetHeightPx, type))
@@ -63,9 +64,11 @@ class PreviewDecoder(
         }
     }
 
-    suspend fun decodeBitmap(storageKey: String, targetWidthPx: Int, targetHeightPx: Int): Bitmap? = withContext(Dispatchers.IO) {
-        readBitmap(storageKey, targetWidthPx, targetHeightPx)
-    }
+    suspend fun decodeBitmap(storageKey: String, targetWidthPx: Int, targetHeightPx: Int,
+                             priority: PreviewPriority = PreviewPriority.Current, onStarted: () -> Unit = {}): Bitmap? =
+        largeDecodes.decode(priority, onStarted) {
+            readBitmap(storageKey, targetWidthPx, targetHeightPx)?.also { it.prepareToDraw() }
+        }
 
     private fun readThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int): Bitmap? {
         val uri = assetReader.contentUri(storageKey)
@@ -126,7 +129,9 @@ class PreviewDecoder(
         }
     }
 
-    suspend fun decodeAnimated(storageKey: String, targetWidthPx: Int, targetHeightPx: Int): Drawable = withContext(Dispatchers.IO) {
+    suspend fun decodeAnimated(storageKey: String, targetWidthPx: Int, targetHeightPx: Int,
+                               priority: PreviewPriority = PreviewPriority.Current, onStarted: () -> Unit = {}): Drawable =
+        largeDecodes.decode(priority, onStarted) {
         val uri = assetReader.contentUri(storageKey)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(contentResolver, uri)
@@ -141,7 +146,8 @@ class PreviewDecoder(
         } else {
             val movie = contentResolver.openInputStream(uri)?.use { Movie.decodeStream(it) }
                 ?: throw FileNotFoundException("无法读取 GIF 动画")
-            MovieDrawable(movie)
+            val size = fittedSize(movie.width(), movie.height(), targetWidthPx, targetHeightPx)
+            MovieDrawable(movie, size.first, size.second)
         }
     }
 
@@ -223,7 +229,7 @@ class PreviewDecoder(
     }
 }
 
-private class MovieDrawable(private val movie: Movie) : Drawable(), Runnable {
+private class MovieDrawable(private val movie: Movie, private val width: Int, private val height: Int) : Drawable(), Runnable {
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
     private var startedAt = 0L
     private var running = false
@@ -245,6 +251,8 @@ private class MovieDrawable(private val movie: Movie) : Drawable(), Runnable {
     }
 
     override fun run() = invalidateSelf()
+    override fun getIntrinsicWidth(): Int = width
+    override fun getIntrinsicHeight(): Int = height
     override fun setAlpha(alpha: Int) { paint.alpha = alpha }
     override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
     @Deprecated("Deprecated in Java") override fun getOpacity(): Int = PixelFormat.TRANSLUCENT

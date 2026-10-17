@@ -27,7 +27,7 @@ class GalleryMediaSelectionTest {
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
 
     private fun model(repo: SelectionRepository, media: SelectionMedia, handle: SavedStateHandle = SavedStateHandle()): GalleryViewModel =
-        GalleryViewModel(repo, handle, media.repository).also { store.put("selection${serial++}", it) }
+        GalleryViewModel(repo, handle, media.repository, computationDispatcher = dispatcher).also { store.put("selection${serial++}", it) }
 
     @Test fun longPressAndTapSelectValidItemsWithoutOpeningViewerAndZeroStaysInMode() = runTest(dispatcher) {
         val vm = model(SelectionRepository(), SelectionMedia())
@@ -185,13 +185,13 @@ class GalleryMediaSelectionTest {
             override val options = MutableStateFlow(original)
             override fun save(options: BrowseOptions) { this.options.value = options }
         }
-        val vm = GalleryViewModel(SelectionRepository(), SavedStateHandle(), browsePreferences = preferences).also { store.put("swipe1", it) }
+        val vm = GalleryViewModel(SelectionRepository(), SavedStateHandle(), browsePreferences = preferences, computationDispatcher = dispatcher).also { store.put("swipe1", it) }
         runCurrent()
         vm.onEvent(GalleryEvent.SetSwipeDelete(false))
         runCurrent()
         assertEquals(original.copy(swipeDelete = false), preferences.options.value)
         assertEquals(original.copy(swipeDelete = false), vm.state.value.browseOptions)
-        val recreated = GalleryViewModel(SelectionRepository(), SavedStateHandle(), browsePreferences = preferences).also { store.put("swipe2", it) }
+        val recreated = GalleryViewModel(SelectionRepository(), SavedStateHandle(), browsePreferences = preferences, computationDispatcher = dispatcher).also { store.put("swipe2", it) }
         assertEquals(original.copy(swipeDelete = false), recreated.state.value.browseOptions)
     }
 
@@ -214,7 +214,7 @@ class GalleryMediaSelectionTest {
             when (method.name) {
                 "observeArtistImages", "observeUnassignedMedia" -> images
                 "observeCollectionMedia" -> flowOf(listOf(image("second")))
-                "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchSummary>())
+                "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchHistorySummary>())
                 else -> error("此测试不得执行删除或其他媒体写入：${method.name}")
             }
         } as MediaLibraryRepository

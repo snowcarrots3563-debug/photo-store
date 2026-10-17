@@ -27,7 +27,7 @@ class GalleryDefaultImportTargetTest {
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
     private fun model(repo: TargetRepository = TargetRepository(), handle: SavedStateHandle = SavedStateHandle(),
                       preferences: BrowsePreferences? = null, media: MediaLibraryRepository? = null) =
-        GalleryViewModel(repo, handle, media, browsePreferences = preferences).also { store.put("default${serial++}", it) }
+        GalleryViewModel(repo, handle, media, browsePreferences = preferences, computationDispatcher = dispatcher).also { store.put("default${serial++}", it) }
 
     @Test fun defaultTargetLaunchesFilePickerWithoutCreatingACollection() = runTest(dispatcher) {
         val repo = TargetRepository()
@@ -160,7 +160,7 @@ class GalleryDefaultImportTargetTest {
         val media = Proxy.newProxyInstance(MediaLibraryRepository::class.java.classLoader, arrayOf(MediaLibraryRepository::class.java)) { _, method, _ ->
             when (method.name) {
                 "observeArtistImages" -> flowOf(listOf(MediaAssetSummary("image", "image.png", MediaType.IMAGE, 6000, 0, "image.png", "key")))
-                "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchSummary>())
+                "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchHistorySummary>())
                 else -> error("Unexpected media method ${method.name}")
             }
         } as MediaLibraryRepository

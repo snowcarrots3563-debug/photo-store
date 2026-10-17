@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Relation
 import androidx.room.Transaction
 import androidx.room.Update
+import dev.local.artistgallery.model.ImportBatchHistorySummary
 import kotlinx.coroutines.flow.Flow
 
 data class ArtistWithCollections(
@@ -329,9 +330,12 @@ interface GalleryDao {
     @Query("SELECT * FROM ImportBatch WHERE NOT EXISTS (SELECT 1 FROM ArchiveTask WHERE ArchiveTask.id = ImportBatch.id) ORDER BY createdAt DESC LIMIT 10")
     suspend fun latestImportBatches(): List<ImportBatchWithItems>
 
+    @Query("SELECT id, status FROM ImportBatch WHERE NOT EXISTS (SELECT 1 FROM ArchiveTask WHERE ArchiveTask.id = ImportBatch.id) ORDER BY createdAt DESC LIMIT 10")
+    fun observeLatestImportBatches(): Flow<List<ImportBatchHistorySummary>>
+
     @Transaction
-    @Query("SELECT * FROM ImportBatch WHERE NOT EXISTS (SELECT 1 FROM ArchiveTask WHERE ArchiveTask.id = ImportBatch.id) ORDER BY createdAt DESC LIMIT 10")
-    fun observeLatestImportBatches(): Flow<List<ImportBatchWithItems>>
+    @Query("SELECT * FROM ImportBatch WHERE id = :batchId AND NOT EXISTS (SELECT 1 FROM ArchiveTask WHERE ArchiveTask.id = ImportBatch.id)")
+    fun observeImportBatchResult(batchId: String): Flow<ImportBatchWithItems?>
 
     @Query("SELECT * FROM MediaAsset WHERE state = 'PENDING_DELETE'")
     suspend fun pendingDeleteAssets(): List<MediaAssetEntity>

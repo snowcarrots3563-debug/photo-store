@@ -68,7 +68,7 @@ class CollectionMediaSelectionUiTest {
     private fun show() {
         val initial = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
             route = GalleryRoute.Collection(collection.id, collection.artistId), artistDetail = detail,
-            collection = collection, mediaItems = images)
+            collection = collection, ).withPreparedMedia(images)
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
             current = remember { mutableStateOf(initial) }
             DTheme {

@@ -6,6 +6,7 @@ import org.junit.Test
 
 class ReorderRowsStateTest {
     private fun rows(): ReorderRowsState = ReorderRowsState(listOf("a", "b", "c", "d")).apply {
+        viewport = Rect(0f, 0f, 200f, 360f)
         rowBounds["a"] = Rect(0f, 0f, 200f, 60f)
         rowBounds["b"] = Rect(0f, 60f, 200f, 180f)
         rowBounds["c"] = Rect(0f, 180f, 200f, 260f)
@@ -71,5 +72,45 @@ class ReorderRowsStateTest {
         assertEquals(listOf("b", "c", "a", "d"), state.order)
         assertEquals(30f, state.pointerY, .01f)
         assertEquals(200f, state.translation("a"), .01f)
+    }
+
+    @Test fun disposedAndOffscreenRowsCannotBecomeReorderTargets() {
+        val state = rows()
+        state.removeRow("b")
+        state.rowBounds["c"] = Rect(0f, 500f, 200f, 580f)
+        state.start("a", 30f)
+        state.move(220f)
+        assertEquals(listOf("a", "b", "c", "d"), state.order)
+        assertFalse(state.rowBounds.containsKey("b"))
+        state.move(70f)
+        assertEquals(listOf("b", "c", "d", "a"), state.order)
+    }
+
+    @Test fun retainedBoundsOutsideTheViewportAreNotCrossingTargets() {
+        val state = rows()
+        state.rowBounds["b"] = Rect(0f, -120f, 200f, -1f)
+        state.start("a", 30f)
+        state.move(10f)
+        assertEquals(listOf("a", "b", "c", "d"), state.order)
+    }
+
+    @Test fun newlyVisibleVariableHeightSlotsContinueTheDragAndCancelWithoutCommit() {
+        val state = rows()
+        val commits = mutableListOf<List<String>>()
+        state.start("a", 30f)
+        state.move(130f)
+        state.removeRow("b")
+        state.rowBounds["a"] = Rect(0f, -60f, 200f, 0f)
+        state.rowBounds["c"] = Rect(0f, 0f, 200f, 80f)
+        state.rowBounds["d"] = Rect(0f, 80f, 200f, 180f)
+        state.reorder()
+        assertEquals(listOf("b", "c", "d", "a"), state.order)
+        assertEquals(190f, state.translation("a"), .01f)
+        assertEquals(160f, state.pointerY, .01f)
+        state.cancel()
+        state.cancel()
+        state.finish { commits.add(it) }
+        assertEquals(listOf("a", "b", "c", "d"), state.order)
+        assertTrue(commits.isEmpty())
     }
 }

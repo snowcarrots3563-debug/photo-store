@@ -30,7 +30,7 @@ class GalleryReturnStateTest {
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
 
     private fun model(repository: ReturnRepository, media: ReturnMedia): GalleryViewModel =
-        GalleryViewModel(repository, SavedStateHandle(), media.repository).also { store.put("return", it) }
+        GalleryViewModel(repository, SavedStateHandle(), media.repository, computationDispatcher = dispatcher).also { store.put("return", it) }
 
     @Test fun collectionBackImmediatelyRestoresParentImagesAndTabThenObservesUpdates() = runTest(dispatcher) {
         val repo = ReturnRepository()
@@ -330,7 +330,7 @@ class GalleryReturnStateTest {
             when (method.name) {
                 "observeArtistImages" -> { artistSubscriptions++; artistSource }
                 "observeCollectionMedia" -> collectionSource
-                "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchSummary>())
+                "observeLatestImportBatches" -> flowOf(emptyList<ImportBatchHistorySummary>())
                 else -> error("浏览不应调用 ${method.name}")
             }
         } as MediaLibraryRepository

@@ -1,6 +1,5 @@
 package dev.local.artistgallery.ui.comic
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,6 +27,8 @@ import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.MediaType
 import dev.local.artistgallery.model.naturalCompare
 import dev.local.artistgallery.ui.AnimatedGifImage
+import dev.local.artistgallery.ui.PreviewImage
+import dev.local.artistgallery.ui.rememberPreviewImage
 import dev.local.artistgallery.ui.DColors
 import dev.local.artistgallery.ui.DIcon
 import dev.local.artistgallery.ui.DIconButton
@@ -36,8 +37,6 @@ import dev.local.artistgallery.ui.DIconImage
 import dev.local.artistgallery.ui.ComicDirection
 import dev.local.artistgallery.ui.GalleryEvent
 import dev.local.artistgallery.ui.GalleryUiState
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @Composable
 fun ComicReaderScreen(state: GalleryUiState, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit) {
@@ -87,11 +86,10 @@ private fun ComicMedia(item: MediaAssetSummary, decoder: PreviewDecoder?, isVisi
         if (item.type == MediaType.GIF && decoder != null && playGifs) {
             AnimatedGifImage(item.storageKey, decoder, Modifier.fillMaxWidth().wrapContentHeight(), isVisible, targetWidthPx, targetHeightPx)
         } else if (decoder != null) {
-            val bitmap by produceState<Bitmap?>(null, item.storageKey, decoder, targetWidthPx, targetHeightPx) {
-                value = withContext(Dispatchers.IO) { runCatching { decoder.decodeBitmap(item.storageKey, targetWidthPx, targetHeightPx) }.getOrNull() }
-            }
+            val image = rememberPreviewImage(item.storageKey, decoder, targetWidthPx, targetHeightPx, isCurrent = isVisible)
+            val bitmap = (image as? PreviewImage.Still)?.bitmap
             if (bitmap != null) {
-                Image(bitmap!!.asImageBitmap(), item.name, Modifier.fillMaxWidth().aspectRatio(bitmap!!.width.toFloat() / bitmap!!.height.coerceAtLeast(1)), contentScale = ContentScale.Fit)
+                Image(bitmap.asImageBitmap(), item.name, Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)), contentScale = ContentScale.Fit)
             } else Box(Modifier.fillMaxWidth().height(280.dp))
         } else Box(Modifier.fillMaxWidth().height(280.dp))
         Text(item.name, Modifier.align(Alignment.BottomEnd).padding(8.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = .88f)).padding(horizontal = 7.dp, vertical = 3.dp), fontSize = 10.sp, color = DColors.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -116,7 +116,7 @@ class ArtistHeaderScrollUiTest {
 
     private fun show(tab: ArtistTab = ArtistTab.Images) {
         val initial = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
-            route = GalleryRoute.Artist("artist"), artistDetail = detail, artistTab = tab, mediaItems = images)
+            route = GalleryRoute.Artist("artist"), artistDetail = detail, artistTab = tab, ).withPreparedMedia(images)
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
             current = remember { mutableStateOf(initial) }
             visible = remember { mutableStateOf(true) }

@@ -29,7 +29,7 @@ class GalleryArchiveQueryPauseTest {
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
 
     private fun model(repository: Repository, preferences: BrowsePreferences? = null): GalleryViewModel =
-        GalleryViewModel(repository, SavedStateHandle(), repository.media, browsePreferences = preferences)
+        GalleryViewModel(repository, SavedStateHandle(), repository.media, browsePreferences = preferences, computationDispatcher = dispatcher)
             .also { store.put("pause-${nextModel++}", it) }
 
     @Test fun thousandInvalidationsStopColdQueriesThenRefreshLatestOnce() = runTest(dispatcher) {
@@ -176,6 +176,7 @@ class GalleryArchiveQueryPauseTest {
         val vm = model(repo, preferences)
         vm.onEvent(GalleryEvent.OpenCollection("c", "a")); runCurrent()
         vm.onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.SizeDescending))
+        runCurrent()
         vm.onEvent(GalleryEvent.SearchChanged("retained query"))
         vm.onEvent(GalleryEvent.RememberScrollPosition("collection:c", 2, 77))
         vm.onEvent(GalleryEvent.StartMediaSelection("one"))
@@ -380,7 +381,7 @@ class GalleryArchiveQueryPauseTest {
         val artistImages = mapOf("a" to ColdSource(listOf(image("one"), image("two"))), "b" to ColdSource(listOf(image("b-one"))))
         val collectionMedia = mapOf("c" to ColdSource(listOf(image("one"), image("two"))), "d" to ColdSource(listOf(image("b-one"))))
         val unassigned = ColdSource(listOf(image("unassigned")))
-        val history = ColdSource(emptyList<ImportBatchSummary>())
+        val history = ColdSource(emptyList<ImportBatchHistorySummary>())
         val media = Proxy.newProxyInstance(MediaLibraryRepository::class.java.classLoader, arrayOf(MediaLibraryRepository::class.java)) { _, method, args ->
             when (method.name) {
                 "observeArtistImages" -> artistImages.getValue(args!![0] as String).observe()

@@ -192,7 +192,7 @@ class VideoPlaybackUiTest {
         val key = if (broken) fixture.broken() else fixture.video(frames = 120)
         val item = MediaAssetSummary("fixture-video", "synthetic.mp4", MediaType.VIDEO, fixture.files.originalFile(key).length(), 0, "synthetic.mp4", key)
         compose.activity.setContent {
-            current = remember { mutableStateOf(GalleryUiState(mediaItems = listOf(item), browseOptions = BrowseOptions(autoPlayVideos = autoPlay))) }
+            current = remember { mutableStateOf(GalleryUiState( browseOptions = BrowseOptions(autoPlayVideos = autoPlay)).withPreparedMedia(listOf(item))) }
             visible = remember { mutableStateOf(true) }
             val activityOwner = LocalLifecycleOwner.current
             owner = remember { mutableStateOf(customOwner ?: activityOwner) }

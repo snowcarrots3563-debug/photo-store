@@ -73,7 +73,7 @@ class CollectionSortUiTest {
 
     private fun show(selecting: Boolean = false) {
         current = mutableStateOf(GalleryUiState(route = GalleryRoute.Collection("c", "a"), collection = collection,
-            loadState = LoadState.Ready, mediaLoadState = LoadState.Ready, mediaItems = sortCollectionMedia(media, MediaSort.Default), mediaSelectionMode = selecting))
+            loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,  mediaSelectionMode = selecting).withPreparedMedia(sortCollectionMedia(media, MediaSort.Default)))
         compose.activity.setContent {
             val event: (GalleryEvent) -> Unit = {
                 events += it
@@ -81,8 +81,8 @@ class CollectionSortUiTest {
                     is GalleryEvent.OpenDialog -> current.value.copy(dialog = it.dialog)
                     GalleryEvent.DismissDialog -> current.value.copy(dialog = GalleryDialog.None)
                     is GalleryEvent.SetCollectionMediaSort -> current.value.copy(dialog = GalleryDialog.None,
-                        mediaItems = sortCollectionMedia(media, it.sort),
-                        browseOptions = BrowseOptions(collectionMediaSorts = mapOf("c" to it.sort)))
+
+                        browseOptions = BrowseOptions(collectionMediaSorts = mapOf("c" to it.sort))).withPreparedMedia(sortCollectionMedia(media, it.sort))
                     is GalleryEvent.RememberScrollPosition -> current.value.copy(scrollPositions = current.value.scrollPositions +
                         (it.key to GalleryScrollPosition(it.index, it.offset)))
                     else -> current.value

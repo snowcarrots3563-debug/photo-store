@@ -86,6 +86,13 @@ fun DGroup(modifier: Modifier = Modifier, content: @Composable ColumnScope.() ->
 }
 
 @Composable
+internal fun DGroupRow(first: Boolean, last: Boolean, content: @Composable ColumnScope.() -> Unit) {
+    val top = if (first) 26.dp else 0.dp
+    val bottom = if (last) 26.dp else 0.dp
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)).background(DColors.Panel), content = content)
+}
+
+@Composable
 fun DDivider(inset: Int = 18) { Box(Modifier.fillMaxWidth().padding(horizontal = inset.dp).height(1.dp).background(DColors.Line)) }
 
 @Composable

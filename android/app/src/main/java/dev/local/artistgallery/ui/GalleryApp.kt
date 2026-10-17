@@ -27,6 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -59,6 +62,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.ZoneId
 
 @Composable
 fun GalleryApp(
@@ -81,6 +85,15 @@ fun GalleryApp(
             onImportCompleted = { completion -> importNotifications?.completed(completion) }, mediaImportSession = mediaImportSession) } }
     }
     val vm: GalleryViewModel = viewModel(factory = factory)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(vm, lifecycleOwner) {
+        vm.setGridZoneId(ZoneId.systemDefault())
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) vm.setGridZoneId(ZoneId.systemDefault())
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var supplement by rememberSaveable { mutableStateOf(false) }
