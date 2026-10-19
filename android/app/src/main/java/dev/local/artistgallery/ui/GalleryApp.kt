@@ -181,15 +181,22 @@ fun GalleryApp(
         onImportResultConsumed()
     }
     var toast by remember { mutableStateOf<String?>(null) }
+    var deletedCount by remember { mutableStateOf<Int?>(null) }
     var scrollToArtist by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(vm) {
         vm.feedback.collectLatest { feedback ->
-            if (feedback is GalleryFeedback.Saved) {
-                toast = feedback.message
-                scrollToArtist = feedback.scrollToArtistId
-                delay(4500)
-                toast = null
+            toast = null
+            deletedCount = null
+            when (feedback) {
+                is GalleryFeedback.Saved -> {
+                    toast = feedback.message
+                    scrollToArtist = feedback.scrollToArtistId
+                }
+                is GalleryFeedback.Deleted -> deletedCount = feedback.count
             }
+            delay(4500)
+            toast = null
+            deletedCount = null
         }
     }
     BackHandler(state.route != GalleryRoute.Home || state.dialog != GalleryDialog.None || state.isSaving || state.mediaSelectionMode || state.entitySelectionKind != null) { vm.onEvent(GalleryEvent.NavigateBack) }
@@ -255,6 +262,7 @@ fun GalleryApp(
                     Text(message, color = Color.White, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(start = 20.dp, end = 20.dp, bottom = 112.dp)
                         .background(Color(0xFF252A33), RoundedCornerShape(18.dp)).padding(horizontal = 18.dp, vertical = 12.dp).semantics { liveRegion = LiveRegionMode.Polite })
                 }
+                deletedCount?.takeIf { !state.isDeleting && state.dialog == GalleryDialog.None }?.let { DeletionCompleteNotice(it) }
             }
         }
         GalleryDialogs(state, toast, importEventHandler, archiveImporter?.let { coordinator -> {

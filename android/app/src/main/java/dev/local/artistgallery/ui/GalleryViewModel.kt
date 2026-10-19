@@ -1114,11 +1114,12 @@ class GalleryViewModel(
             else -> return
         }
         if (ids.isEmpty()) return
-        change { it.copy(isSaving = true, fieldError = null) }
+        change { it.copy(isSaving = true, isDeleting = true, fieldError = null) }
         viewModelScope.launch {
             val remaining = ids.toMutableSet()
             var completed = 0
             var unavailable = 0
+            var completion: GalleryFeedback? = null
             fun keepRemaining(message: String) {
                 change { if (bulk) it.copy(dialog = GalleryDialog.DeleteSelectedMedia(remaining.toList()),
                     mediaSelectionMode = true, selectedMediaIds = remaining.toSet(), fieldError = message)
@@ -1135,10 +1136,8 @@ class GalleryViewModel(
                 if (remaining.isEmpty()) {
                     change { it.copy(dialog = GalleryDialog.None, mediaSelectionMode = if (bulk) false else it.mediaSelectionMode,
                         selectedMediaIds = if (bulk) emptySet() else it.selectedMediaIds) }
-                    val message = if (bulk) "已删除 $completed 个图库副本及全部引用，源文件未更改。" +
-                        (if (unavailable > 0) "$unavailable 项已不可用。" else "")
-                    else if (completed == 0) "这张图片已不可用。" else "已删除图库副本及全部引用，源文件未更改。"
-                    messages.emit(GalleryFeedback.Saved(message))
+                    completion = if (completed > 0) GalleryFeedback.Deleted(completed)
+                        else GalleryFeedback.Saved(if (bulk) "$unavailable 项已不可用。" else "这张图片已不可用。")
                 } else {
                     keepRemaining(if (bulk) "已删除 $completed 个副本，${remaining.size} 个副本删除失败，已保留副本及引用，请重试。"
                         else "图片删除失败，已保留图片及引用，请重试。")
@@ -1151,6 +1150,7 @@ class GalleryViewModel(
                     else "删除未完成，请重试；中断任务会在下次启动时恢复。")
             }
             finally { finishMediaDeletion() }
+            completion?.let { messages.emit(it) }
         }
     }
 
@@ -1171,7 +1171,7 @@ class GalleryViewModel(
                 active?.join()
                 if (parentPreparationJob === parent && mediaPreparationJob === active) break
             }
-        } finally { change { it.copy(isSaving = false) } }
+        } finally { change { it.copy(isSaving = false, isDeleting = false) } }
     }
 
     private fun forgetEntity(kind: EntitySelectionKind, id: String) {
@@ -1202,15 +1202,20 @@ class GalleryViewModel(
             else -> return
         }.distinct()
         if (ids.isEmpty()) return
-        change { it.copy(isSaving = true, fieldError = null) }
+        change { it.copy(isSaving = true, isDeleting = true, fieldError = null) }
         viewModelScope.launch {
             val remaining = ids.toMutableSet()
             var completed = 0
+            var completion: GalleryFeedback? = null
             fun keepRemaining(message: String) {
                 change { it.copy(dialog = entityDeleteDialog(kind, remaining.toList()), entitySelectionKind = kind,
                     selectedEntityIds = remaining.toSet(), fieldError = message) }
             }
             try {
+                // Freeze existence before shared-copy cleanup can also remove another selected collection.
+                val existing = ids.filter { id ->
+                    if (kind == EntitySelectionKind.Artists) repository.artistExists(id) else repository.collectionExists(id)
+                }.toSet()
                 for (id in ids) {
                     val deleted = try {
                         val assets = if (kind == EntitySelectionKind.Artists) media.getArtistAssets(id) else media.getCollectionAssets(id)
@@ -1218,19 +1223,19 @@ class GalleryViewModel(
                             removeCachedImages(deleted + missing)
                         }
                         if (result.failedIds.isNotEmpty()) false else if (kind == EntitySelectionKind.Artists)
-                            media.deleteArtistIfEmpty(id) || repository.observeArtist(id).first() == null
-                        else media.deleteCollectionIfEmpty(id) || repository.observeCollection(id).first() == null
+                            media.deleteArtistIfEmpty(id) || !repository.artistExists(id)
+                        else media.deleteCollectionIfEmpty(id) || !repository.collectionExists(id)
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { false }
                     if (deleted) {
                         remaining.remove(id)
-                        completed++
+                        if (id in existing) completed++
                         forgetEntity(kind, id)
                     }
                 }
                 if (remaining.isEmpty()) {
                     change { it.copy(dialog = GalleryDialog.None, entitySelectionKind = null, selectedEntityIds = emptySet()) }
-                    messages.emit(GalleryFeedback.Saved("已删除 $completed 个${if (kind == EntitySelectionKind.Artists) "画师" else "作品集"}及图库副本，共享引用已移除，源文件未更改。"))
+                    completion = if (completed > 0) GalleryFeedback.Deleted(completed) else GalleryFeedback.Saved("所选项目已不可用。")
                 } else keepRemaining("已删除 $completed 项，${remaining.size} 项未完成，已保留剩余内容；已删除的副本及共享引用不会恢复，请重试。")
             } catch (cancelled: CancellationException) {
                 keepRemaining("已删除 $completed 项，${remaining.size} 项未完成；中断的副本清理会在下次启动时恢复。")
@@ -1238,6 +1243,7 @@ class GalleryViewModel(
             } catch (_: Exception) {
                 keepRemaining("已删除 $completed 项，${remaining.size} 项未完成，请重试；中断的副本清理会在下次启动时恢复。")
             } finally { finishMediaDeletion() }
+            completion?.let { messages.emit(it) }
         }
     }
 
@@ -1245,8 +1251,9 @@ class GalleryViewModel(
         val media = mediaRepository ?: return
         val importer = mediaImporter ?: return
         val dialog = state.value.dialog as? GalleryDialog.DeleteArtist ?: return
-        change { it.copy(isSaving = true, fieldError = null) }
+        change { it.copy(isSaving = true, isDeleting = true, fieldError = null) }
         viewModelScope.launch {
+            var completed = false
             try {
                 val ids = media.getArtistAssets(dialog.id).map { it.id }
                 val result = deleteMediaCopies(media, ids, importer::deleteOriginal) { deleted, missing ->
@@ -1258,7 +1265,7 @@ class GalleryViewModel(
                 } else if (media.deleteArtistIfEmpty(dialog.id)) {
                     forgetEntity(EntitySelectionKind.Artists, dialog.id)
                     navigate(GalleryRoute.Home)
-                    messages.emit(GalleryFeedback.Saved("已删除画师、作品集及图库副本，共享引用已移除。"))
+                    completed = true
                 } else {
                     change { it.copy(fieldError = "画师内容已变化，删除未完成，请重试。") }
                 }
@@ -1266,6 +1273,7 @@ class GalleryViewModel(
             catch (_: Exception) {
                 change { it.copy(fieldError = "删除未完成，画师已保留，请重试；已删除内容不会恢复，中断的副本清理会在下次启动时继续。") }
             } finally { finishMediaDeletion() }
+            if (completed) messages.emit(GalleryFeedback.Deleted(1))
         }
     }
 
@@ -1294,17 +1302,33 @@ class GalleryViewModel(
         val media = mediaRepository ?: return
         val importer = mediaImporter ?: return
         val dialog = state.value.dialog as? GalleryDialog.RemoveLastReference ?: return
+        change { it.copy(isSaving = true, isDeleting = true, fieldError = null) }
         viewModelScope.launch {
-            val asset = media.markLastReferenceForDelete(dialog.collectionId, dialog.assetId)
-            if (asset == null) {
-                change { it.copy(dialog = GalleryDialog.None) }
-                messages.emit(GalleryFeedback.Saved("媒体关系已变化，请刷新后重试。"))
-                return@launch
-            }
-            val deleted = try { importer.deleteOriginal(asset.storageKey) } catch (_: Exception) { false }
-            if (deleted) media.completeAssetDelete(asset.id) else media.restoreAssetAfterDeleteFailure(asset.id)
-            change { it.copy(dialog = GalleryDialog.None) }
-            messages.emit(GalleryFeedback.Saved(if (deleted) "已删除图库副本；系统相册原文件未更改。" else "图库文件删除失败，已保留记录。"))
+            var completion: GalleryFeedback? = null
+            try {
+                val asset = media.markLastReferenceForDelete(dialog.collectionId, dialog.assetId)
+                if (asset == null) {
+                    change { it.copy(dialog = GalleryDialog.None) }
+                    completion = GalleryFeedback.Saved("媒体关系已变化，请刷新后重试。")
+                } else {
+                    val deleted = try { importer.deleteOriginal(asset.storageKey) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { false }
+                    if (deleted) {
+                        media.completeAssetDelete(asset.id)
+                        removeCachedImages(setOf(asset.id))
+                        change { it.copy(dialog = GalleryDialog.None) }
+                        completion = GalleryFeedback.Deleted(1)
+                    } else {
+                        media.restoreAssetAfterDeleteFailure(asset.id)
+                        change { it.copy(fieldError = "图库文件删除失败，已保留记录。") }
+                    }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                change { it.copy(fieldError = "删除未完成，请重试；中断任务会在下次启动时恢复。") }
+            } finally { finishMediaDeletion() }
+            completion?.let { messages.emit(it) }
         }
     }
 

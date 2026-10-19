@@ -41,6 +41,10 @@ class RoomGalleryRepository(private val database: GalleryDatabase,
     override fun observeCollection(id: String): Flow<CollectionSummary?> =
         dao.observeCollection(id).map { it?.summary() }.flowOn(computationDispatcher)
 
+    override suspend fun artistExists(id: String): Boolean = withContext(Dispatchers.IO) { dao.getArtist(id) != null }
+
+    override suspend fun collectionExists(id: String): Boolean = withContext(Dispatchers.IO) { dao.getCollection(id) != null }
+
     override suspend fun createArtist(name: String): SaveResult = save {
         val normalized = NameRules.normalize(name)
         if (normalized.isEmpty()) return@save SaveResult.InvalidName

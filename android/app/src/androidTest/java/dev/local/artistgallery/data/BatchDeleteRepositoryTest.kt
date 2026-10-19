@@ -33,6 +33,23 @@ class BatchDeleteRepositoryTest {
 
     @After fun close() { database.close() }
 
+    @Test fun identityChecksReadOnlyPrimaryKeysForEmptyAndMissingEntities() = runBlocking {
+        seedArtists()
+        queries.clear()
+        assertTrue(repository.artistExists("a"))
+        assertFalse(repository.artistExists("missing"))
+        assertTrue(repository.collectionExists("c"))
+        assertFalse(repository.collectionExists("missing"))
+        val reads = synchronized(queries) { queries.toList() }
+            .map(String::trim).filter { it.startsWith("SELECT", ignoreCase = true) && !it.contains("room_", ignoreCase = true) }
+        assertEquals(listOf("SELECT * FROM Artist WHERE id = ?", "SELECT * FROM Artist WHERE id = ?",
+            "SELECT * FROM WorkCollection WHERE id = ?", "SELECT * FROM WorkCollection WHERE id = ?"), reads)
+        assertTrue(repository.deleteArtistIfEmpty("a"))
+        assertFalse(repository.artistExists("a"))
+        assertFalse(repository.collectionExists("c"))
+        assertTrue(repository.artistExists("b"))
+    }
+
     @Test fun thousandAssetsUseFourBatchUpdatesAndFourCleanupTransactions() = runBlocking {
         val ids = (0 until 1000).map(Int::toString)
         database.withTransaction { ids.forEach { dao.insertAsset(asset(it)) } }

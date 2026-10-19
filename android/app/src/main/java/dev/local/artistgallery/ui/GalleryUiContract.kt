@@ -71,6 +71,7 @@ data class GalleryUiState(
     val collection: CollectionSummary? = null,
     val dialog: GalleryDialog = GalleryDialog.None,
     val isSaving: Boolean = false,
+    val isDeleting: Boolean = false,
     val fieldError: String? = null,
     val preparedMedia: PreparedMedia? = null,
     val mediaLoadState: LoadState = LoadState.Loading,
@@ -158,6 +159,7 @@ sealed interface GalleryEvent {
 }
 sealed interface GalleryFeedback {
     data class Saved(val message: String, val scrollToArtistId: String? = null) : GalleryFeedback
+    data class Deleted(val count: Int) : GalleryFeedback
 }
 
 sealed interface GalleryEffect {

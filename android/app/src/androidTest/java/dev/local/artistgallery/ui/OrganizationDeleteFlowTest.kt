@@ -13,9 +13,17 @@ import dev.local.artistgallery.data.importing.MediaFileStore
 import dev.local.artistgallery.data.importing.MediaImportCoordinator
 import java.io.File
 import java.util.UUID
+import java.util.ArrayDeque
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -36,6 +44,21 @@ class OrganizationDeleteFlowTest {
     private lateinit var importer: MediaImportCoordinator
     private lateinit var model: GalleryViewModel
     private val store = ViewModelStore()
+    private val feedback = MutableStateFlow<List<Pair<GalleryFeedback, GalleryUiState>>>(emptyList())
+
+    private fun recordFeedback() {
+        model.viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            model.feedback.collect { feedback.value += it to model.state.value }
+        }
+    }
+
+    private suspend fun deletedCount(): Int {
+        val (message, completedState) = withTimeout(5_000) { feedback.first { events -> events.any { it.first is GalleryFeedback.Deleted } } }
+            .last { it.first is GalleryFeedback.Deleted }
+        assertFalse(completedState.isSaving)
+        assertFalse(completedState.isDeleting)
+        return (message as GalleryFeedback.Deleted).count
+    }
 
     @Before fun open() {
         testRoot = File(context.cacheDir, "organization-delete-flow-${UUID.randomUUID()}")
@@ -96,6 +119,7 @@ class OrganizationDeleteFlowTest {
         withContext(Dispatchers.Main) {
             model = GalleryViewModel(repository, SavedStateHandle(), repository, importer)
             store.put("organization", model)
+            recordFeedback()
             if (kind == EntitySelectionKind.Collections) {
                 model.onEvent(GalleryEvent.OpenArtist("a"))
                 model.onEvent(GalleryEvent.SwitchArtistTab(ArtistTab.Collections))
@@ -113,6 +137,7 @@ class OrganizationDeleteFlowTest {
         withContext(Dispatchers.Main) {
             model.onEvent(GalleryEvent.ConfirmDeleteSelectedEntities)
             assertTrue(model.state.value.isSaving)
+            assertTrue(model.state.value.isDeleting)
             model.onEvent(GalleryEvent.ConfirmDeleteSelectedEntities)
             model.onEvent(GalleryEvent.DismissDialog)
             model.onEvent(GalleryEvent.OpenManage)
@@ -160,6 +185,7 @@ class OrganizationDeleteFlowTest {
         assertEquals(listOf(other.id), repository.getArtistAssets("other").map { it.id })
         assertTrue(files.hasOriginal(other.storageKey))
         assertEquals("unchanged source", source.readText())
+        assertEquals(2, deletedCount())
     }
 
     @Test fun collectionBatchUsesFrozenIdsAndRetainsOnlyFailedCollectionForRetry() = runBlocking {
@@ -185,6 +211,8 @@ class OrganizationDeleteFlowTest {
         assertEquals(GalleryDialog.DeleteCollections(listOf("d")), partial.dialog)
         assertEquals(setOf("d"), partial.selectedEntityIds)
         assertNotNull(partial.fieldError)
+        assertFalse(partial.isDeleting)
+        assertTrue(feedback.value.none { it.first is GalleryFeedback.Deleted })
         val dao = database.galleryDao()
         assertNull(dao.getCollection("c")); assertNotNull(dao.getCollection("d")); assertNotNull(dao.getCollection("e"))
         assertNull(repository.getAsset(good.id)); assertEquals(0, repository.referenceCount(good.id))
@@ -201,6 +229,7 @@ class OrganizationDeleteFlowTest {
         assertTrue(files.hasOriginal(untouched.storageKey))
         assertNotNull(dao.getArtist("a"))
         assertNull(dao.getCollection("foreign"))
+        assertEquals(1, deletedCount())
     }
 
     @Test fun selectedCollectionsAlreadyRemovedBySharedCopyCleanupStillCompleteSuccessfully() = runBlocking {
@@ -218,6 +247,7 @@ class OrganizationDeleteFlowTest {
         assertNotNull(dao.getCollection("empty"))
         assertNotNull(dao.getArtist("a")); assertNotNull(dao.getArtist("other"))
         assertNull(repository.getAsset(shared.id)); assertFalse(files.hasOriginal(shared.storageKey))
+        assertEquals(2, deletedCount())
     }
 
     @Test fun deletingLastMediaClosesCurrentCollectionAndLeavesSourceAndArtists() = runBlocking {
@@ -229,6 +259,7 @@ class OrganizationDeleteFlowTest {
         withContext(Dispatchers.Main) {
             model = GalleryViewModel(repository, SavedStateHandle(), repository, importer)
             store.put("organization", model)
+            recordFeedback()
             model.onEvent(GalleryEvent.OpenArtist("a"))
         }
         withTimeout(5_000) { model.state.first { it.loadState == LoadState.Ready && it.mediaLoadState == LoadState.Ready } }
@@ -237,6 +268,7 @@ class OrganizationDeleteFlowTest {
         withContext(Dispatchers.Main) {
             model.onEvent(GalleryEvent.OpenDeleteMedia(image.id))
             model.onEvent(GalleryEvent.ConfirmDeleteMedia)
+            assertTrue(model.state.value.isDeleting)
         }
         val state = withTimeout(5_000) { model.state.first {
             !it.isSaving && it.route == GalleryRoute.Artist("a") && it.loadState == LoadState.Ready
@@ -252,6 +284,7 @@ class OrganizationDeleteFlowTest {
         assertNotNull(dao.getArtist("a")); assertNotNull(dao.getArtist("other"))
         assertFalse(files.hasOriginal(image.storageKey))
         assertEquals("unchanged source", source.readText())
+        assertEquals(1, deletedCount())
     }
 
     @Test fun failedDatabaseCleanupLeavesPendingDeleteForRecoveryBeforeCollectionRetry() = runBlocking {
@@ -261,6 +294,8 @@ class OrganizationDeleteFlowTest {
         select(EntitySelectionKind.Collections, "c")
         val partial = confirm()
         assertEquals(GalleryDialog.DeleteCollections(listOf("c")), partial.dialog)
+        assertFalse(partial.isDeleting)
+        assertTrue(feedback.value.none { it.first is GalleryFeedback.Deleted })
         assertEquals("PENDING_DELETE", repository.getAsset(image.id)!!.state)
         assertEquals(1, repository.referenceCount(image.id))
         assertFalse(files.hasOriginal(image.storageKey))
@@ -289,6 +324,7 @@ class OrganizationDeleteFlowTest {
         withContext(Dispatchers.Main) {
             model = GalleryViewModel(repository, SavedStateHandle(), cancelOnSecondBatch, importer)
             store.put("organization", model)
+            recordFeedback()
             model.onEvent(GalleryEvent.OpenArtist("a"))
         }
         withTimeout(30_000) { model.state.first { it.loadState == LoadState.Ready && it.mediaLoadState == LoadState.Ready && it.mediaItems.size == 258 } }
@@ -304,6 +340,8 @@ class OrganizationDeleteFlowTest {
         val partial = withTimeout(30_000) { model.state.first { !it.isSaving } }
         val last = selected.last()
         assertEquals(2, batches)
+        assertFalse(partial.isDeleting)
+        assertTrue(feedback.value.none { it.first is GalleryFeedback.Deleted })
         assertEquals(GalleryDialog.DeleteSelectedMedia(listOf(last.id)), partial.dialog)
         assertTrue(partial.mediaSelectionMode)
         assertEquals(setOf(last.id), partial.selectedMediaIds)
@@ -339,5 +377,140 @@ class OrganizationDeleteFlowTest {
         assertTrue(files.hasOriginal(unavailable.storageKey))
         assertNull(repository.getAsset(ready.id))
         assertFalse(files.hasOriginal(ready.storageKey))
+    }
+
+    @Test fun completedMessageWaitsForBothDeletionSnapshotsBeforeReleasingBusy() = runBlocking {
+        artist("a", "c")
+        val removed = asset("removed", "c")
+        val retained = asset("retained", "c")
+        val worker = QueuedDispatcher()
+        withContext(Dispatchers.Main) {
+            model = GalleryViewModel(repository, SavedStateHandle(), repository, importer, computationDispatcher = worker)
+            store.put("organization", model)
+            recordFeedback()
+            model.onEvent(GalleryEvent.OpenArtist("a"))
+        }
+        prepare(worker) { model.state.value.mediaLoadState == LoadState.Ready }
+        withContext(Dispatchers.Main) { model.onEvent(GalleryEvent.OpenCollection("c", "a")) }
+        prepare(worker) { model.state.value.mediaLoadState == LoadState.Ready }
+        withContext(Dispatchers.Main) {
+            model.onEvent(GalleryEvent.OpenDeleteMedia(removed.id))
+            model.onEvent(GalleryEvent.ConfirmDeleteMedia)
+        }
+        withTimeout(5_000) { while (repository.getAsset(removed.id) != null) delay(1) }
+        withContext(Dispatchers.Main) {
+            assertTrue(model.state.value.isDeleting)
+            assertTrue(model.state.value.isSaving)
+            assertTrue(feedback.value.isEmpty())
+            model.onEvent(GalleryEvent.NavigateBack)
+            assertEquals(GalleryRoute.Collection("c", "a"), model.state.value.route)
+        }
+        prepare(worker) { !model.state.value.isSaving }
+        assertEquals(1, deletedCount())
+        assertEquals(listOf(retained.id), model.state.value.mediaItems.map { it.id })
+        val completedState = feedback.value.single { it.first is GalleryFeedback.Deleted }.second
+        assertEquals(listOf(retained.id), completedState.mediaItems.map { it.id })
+        withContext(Dispatchers.Main) { model.onEvent(GalleryEvent.NavigateBack) }
+        assertEquals(listOf(retained.id), model.state.value.mediaItems.map { it.id })
+    }
+
+    @Test fun alreadyUnavailableMediaDoesNotClaimADeletion() = runBlocking {
+        artist("a", "c")
+        val image = asset("image", "c")
+        val other = asset("other", "c")
+        withContext(Dispatchers.Main) {
+            model = GalleryViewModel(repository, SavedStateHandle(), repository, importer)
+            store.put("organization", model)
+            recordFeedback()
+            model.onEvent(GalleryEvent.OpenArtist("a"))
+        }
+        withTimeout(5_000) { model.state.first { it.mediaLoadState == LoadState.Ready } }
+        withContext(Dispatchers.Main) { model.onEvent(GalleryEvent.OpenDeleteMedia(image.id)) }
+        repository.markAssetForDelete(image.id)
+        assertTrue(importer.deleteOriginal(image.storageKey))
+        repository.completeAssetDelete(image.id)
+        withContext(Dispatchers.Main) { model.onEvent(GalleryEvent.ConfirmDeleteMedia) }
+        withTimeout(5_000) { model.state.first { !it.isSaving } }
+        val (message, completed) = withTimeout(5_000) { feedback.first { it.isNotEmpty() } }.single()
+        assertTrue(message is GalleryFeedback.Saved)
+        assertTrue((message as GalleryFeedback.Saved).message.contains("已不可用"))
+        assertFalse(completed.isDeleting)
+        assertTrue(files.hasOriginal(other.storageKey))
+    }
+
+    @Test fun lastReferenceDeletionUsesDedicatedFeedbackAndClearsBusy() = runBlocking {
+        artist("a", "c")
+        val image = asset("image", "c")
+        withContext(Dispatchers.Main) {
+            model = GalleryViewModel(repository, SavedStateHandle(), repository, importer)
+            store.put("organization", model)
+            recordFeedback()
+            model.onEvent(GalleryEvent.OpenRemoveMedia(image.id, "c"))
+        }
+        withTimeout(5_000) { model.state.first { it.dialog is GalleryDialog.RemoveLastReference } }
+        withContext(Dispatchers.Main) {
+            model.onEvent(GalleryEvent.DeleteLastReference)
+            assertTrue(model.state.value.isDeleting)
+            model.onEvent(GalleryEvent.DismissDialog)
+        }
+        assertEquals(1, deletedCount())
+        assertNull(repository.getAsset(image.id))
+        assertFalse(files.hasOriginal(image.storageKey))
+    }
+
+    @Test fun missingOnlyEntitySelectionKeepsUnavailableFeedbackWithoutSuccessCount() = runBlocking {
+        artist("a", "c")
+        select(EntitySelectionKind.Collections, "c")
+        withContext(Dispatchers.Main) { model.setGalleryQueriesPaused(true) }
+        assertTrue(repository.deleteCollectionIfEmpty("c"))
+        val completed = confirm()
+        assertEquals(GalleryDialog.None, completed.dialog)
+        val (message, completedState) = withTimeout(5_000) { feedback.first { it.isNotEmpty() } }.single()
+        assertTrue(message is GalleryFeedback.Saved)
+        assertTrue((message as GalleryFeedback.Saved).message.contains("已不可用"))
+        assertFalse(completedState.isDeleting)
+    }
+
+    @Test fun legacyDeletionExceptionRestoresRetryDialogAndReleasesBusyWithoutSuccess() = runBlocking {
+        artist("a", "c")
+        val image = asset("image", "c")
+        val failing = object : MediaLibraryRepository by repository {
+            override suspend fun markLastReferenceForDelete(collectionId: String, assetId: String): MediaAssetEntity? {
+                error("synthetic failure")
+            }
+        }
+        withContext(Dispatchers.Main) {
+            model = GalleryViewModel(repository, SavedStateHandle(), failing, importer)
+            store.put("organization", model)
+            recordFeedback()
+            model.onEvent(GalleryEvent.OpenRemoveMedia(image.id, "c"))
+        }
+        withTimeout(5_000) { model.state.first { it.dialog is GalleryDialog.RemoveLastReference } }
+        withContext(Dispatchers.Main) {
+            model.onEvent(GalleryEvent.DeleteLastReference)
+            assertTrue(model.state.value.isDeleting)
+        }
+        val failed = withTimeout(5_000) { model.state.first { !it.isSaving } }
+        assertFalse(failed.isDeleting)
+        assertEquals(GalleryDialog.RemoveLastReference(image.id, "c"), failed.dialog)
+        assertNotNull(failed.fieldError)
+        assertTrue(feedback.value.isEmpty())
+        assertNotNull(repository.getAsset(image.id))
+        assertTrue(files.hasOriginal(image.storageKey))
+    }
+
+    private suspend fun prepare(worker: QueuedDispatcher, complete: () -> Boolean) {
+        withTimeout(5_000) {
+            while (!complete()) {
+                withContext(Dispatchers.Main) { worker.runAll() }
+                delay(1)
+            }
+        }
+    }
+
+    private class QueuedDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+        override fun dispatch(context: CoroutineContext, block: Runnable) { tasks.add(block) }
+        fun runAll() { while (tasks.isNotEmpty()) tasks.removeFirst().run() }
     }
 }

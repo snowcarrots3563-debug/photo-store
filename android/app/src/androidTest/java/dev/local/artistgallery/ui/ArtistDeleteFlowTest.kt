@@ -20,7 +20,11 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -40,6 +44,7 @@ class ArtistDeleteFlowTest {
     private lateinit var importer: MediaImportCoordinator
     private val viewModels = ViewModelStore()
     private lateinit var model: GalleryViewModel
+    private val feedback = MutableStateFlow<List<Pair<GalleryFeedback, GalleryUiState>>>(emptyList())
 
     @Before fun open() {
         testRoot = File(context.cacheDir, "artist-delete-flow-${UUID.randomUUID()}")
@@ -105,6 +110,9 @@ class ArtistDeleteFlowTest {
         withContext(Dispatchers.Main) {
             model = GalleryViewModel(repository, SavedStateHandle(), repository, importer)
             viewModels.put("artist-delete", model)
+            model.viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                model.feedback.collect { feedback.value += it to model.state.value }
+            }
             model.onEvent(GalleryEvent.OpenArtist("a"))
         }
         withTimeout(5_000) {
@@ -120,6 +128,7 @@ class ArtistDeleteFlowTest {
         withContext(Dispatchers.Main) {
             model.onEvent(GalleryEvent.ConfirmDeleteArtist)
             assertTrue(model.state.value.isSaving)
+            assertTrue(model.state.value.isDeleting)
         }
         return withTimeout(5_000) { model.state.first { !it.isSaving } }
     }
@@ -167,6 +176,11 @@ class ArtistDeleteFlowTest {
         assertEquals(listOf(other.id), repository.getArtistAssets("b").map { it.id })
         assertTrue(files.hasOriginal(other.storageKey))
         assertEquals("source remains unchanged", sourceMarker.readText())
+        val (message, completedState) = withTimeout(5_000) { feedback.first { it.isNotEmpty() } }.single()
+        assertEquals(GalleryFeedback.Deleted(1), message)
+        assertFalse(completedState.isDeleting)
+        assertFalse(completedState.isSaving)
+        assertEquals(GalleryRoute.Home, completedState.route)
     }
 
     @Test fun partialFileFailureRetainsFailedReferenceAndSupportsRetry() = runBlocking {
@@ -186,6 +200,8 @@ class ArtistDeleteFlowTest {
         assertTrue(failedState.fieldError!!.contains("1 个副本删除失败"))
         assertTrue(failedState.fieldError!!.contains("已删除的副本"))
         assertFalse(failedState.isSaving)
+        assertFalse(failedState.isDeleting)
+        assertTrue(feedback.value.isEmpty())
         assertNotNull(database.galleryDao().getArtist("a"))
         assertNotNull(database.galleryDao().getCollection("c"))
         assertEquals("READY", repository.getAsset(failed.id)!!.state)

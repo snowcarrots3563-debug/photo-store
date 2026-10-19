@@ -43,6 +43,10 @@ import androidx.compose.ui.window.DialogProperties
 fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent) -> Unit, onArchive: (() -> Unit)? = null, previewDecoder: PreviewDecoder? = null,
                    onFolder: (() -> Unit)? = null,
                    onExport: ((ExportScope) -> Unit)? = null) {
+    if (state.isDeleting) {
+        DeletionProgressDialog()
+        return
+    }
     val dialog = state.dialog
     if (dialog == GalleryDialog.None) return
     if (dialog == GalleryDialog.ArtistImageSort) {
@@ -224,7 +228,10 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
                     GalleryDialog.ImportPreview -> ImportPreviewContent(state, onEvent)
                     GalleryDialog.ImportProgress -> ImportProgressContent(state)
                     is GalleryDialog.ImportResult -> ImportResultContent(state, dialog, onEvent)
-                    is GalleryDialog.RemoveLastReference -> RemoveLastReferenceContent(onEvent)
+                    is GalleryDialog.RemoveLastReference -> {
+                        state.fieldError?.let { Text(it, color = DColors.Error, fontSize = 13.sp) }
+                        RemoveLastReferenceContent(onEvent)
+                    }
                     is GalleryDialog.DeleteMedia -> {
                         DialogHint(dialog.name)
                         DialogHint("删除这个图库副本，并移除所有画师及作品集中的引用。因此变空的作品集也会自动删除。相册、文件管理和压缩包里的源文件不受影响。")
