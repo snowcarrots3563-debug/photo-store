@@ -506,8 +506,8 @@ class ArchiveImportCoordinator(
             root.listFiles()?.filter { it.isDirectory && File(it, ".preparing").isFile && tasks.none { task -> task.id == it.name } }
                 ?.forEach { entry -> runCatching { directory(entry.name) }.getOrNull()?.deleteRecursively() }
             tasks.forEach { task ->
-                refreshResult(task.id)
-                if (repository.importItems(task.id).all { it.status in setOf("COMPLETE", "REUSED", "SKIPPED", "CANCELLED") }) directory(task.id).deleteRecursively()
+                val items = refreshResult(task.id)
+                if (items.all { it.status in setOf("COMPLETE", "REUSED", "SKIPPED", "CANCELLED") }) directory(task.id).deleteRecursively()
             }
             recovered.complete(Unit)
         } catch (error: Exception) {
@@ -518,7 +518,7 @@ class ArchiveImportCoordinator(
 
     suspend fun awaitRecovery() { recovered.await() }
 
-    private suspend fun refreshResult(id: String) {
+    private suspend fun refreshResult(id: String): List<ImportItemEntity> {
         val items = repository.importItems(id)
         val success = items.any { it.status in setOf("COMPLETE", "REUSED") }
         val status = when {
@@ -527,11 +527,12 @@ class ArchiveImportCoordinator(
             items.any { it.status == "SKIPPED" } -> "PARTIAL"
             else -> "COMPLETED"
         }
-        repository.updateImportBatch(id, status)
+        dao.updateImportBatchStatusIfChanged(id, status, System.currentTimeMillis())
         if (sessionId == id) {
             val names = collectionNames(dao.archiveGroups(id), items)
             update { it.copy(items = items, collectionNames = names) }
         }
+        return items
     }
 
     private fun targetCollectionId(group: ArchiveGroupEntity, items: List<ImportItemEntity>): String =

@@ -314,6 +314,7 @@ class GalleryReturnStateTest {
         var artistSubscriptions = 0
         override fun observeArtists(): Flow<List<ArtistSummary>> = flowOf(emptyList())
         override fun observeArtist(id: String): Flow<ArtistDetail?> { artistSubscriptions++; return artistSource }
+        override fun observeArtistHeader(id: String): Flow<ArtistHeader?> = artistSource.map { it?.artist?.let { artist -> ArtistHeader(artist.id, artist.name) } }.distinctUntilChanged()
         override fun observeCollection(id: String): Flow<CollectionSummary?> = collection
         override suspend fun createArtist(name: String): SaveResult = error("浏览不应写入")
         override suspend fun renameArtist(id: String, name: String): SaveResult = error("浏览不应写入")

@@ -3,6 +3,7 @@ package dev.local.artistgallery.data
 import androidx.room.withTransaction
 import dev.local.artistgallery.model.ArtistDetail
 import dev.local.artistgallery.model.ArtistSummary
+import dev.local.artistgallery.model.ArtistHeader
 import dev.local.artistgallery.model.CollectionSummary
 import dev.local.artistgallery.model.CoverRef
 import dev.local.artistgallery.model.AddReferenceResult
@@ -40,6 +41,9 @@ class RoomGalleryRepository(private val database: GalleryDatabase,
 
     override fun observeCollection(id: String): Flow<CollectionSummary?> =
         dao.observeCollection(id).map { it?.summary() }.flowOn(computationDispatcher)
+
+    override fun observeArtistHeader(id: String): Flow<ArtistHeader?> =
+        dao.observeArtistHeader(id).distinctUntilChanged().flowOn(computationDispatcher)
 
     override suspend fun artistExists(id: String): Boolean = withContext(Dispatchers.IO) { dao.getArtist(id) != null }
 
@@ -346,8 +350,8 @@ class RoomGalleryRepository(private val database: GalleryDatabase,
         }
     }
 
-    private fun ArtistWithCollections.summary() = ArtistSummary(
-        artist.id, artist.name, collections.size, imageCount, coverStorageKey?.let(CoverRef::Asset) ?: CoverRef.None, videoCount,
+    private fun ArtistSummaryRow.summary() = ArtistSummary(
+        artist.id, artist.name, collectionCount, imageCount, coverStorageKey?.let(CoverRef::Asset) ?: CoverRef.None, videoCount,
     )
 
     private fun CollectionWithMediaCounts.summary() = CollectionSummary(

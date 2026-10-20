@@ -68,6 +68,7 @@ data class GalleryUiState(
     val artistTab: ArtistTab = ArtistTab.Images,
     val artists: List<ArtistSummary> = emptyList(),
     val artistDetail: ArtistDetail? = null,
+    val artistHeader: ArtistHeader? = null,
     val collection: CollectionSummary? = null,
     val dialog: GalleryDialog = GalleryDialog.None,
     val isSaving: Boolean = false,

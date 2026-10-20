@@ -8,12 +8,12 @@ import androidx.room.Relation
 import androidx.room.Transaction
 import androidx.room.Update
 import dev.local.artistgallery.model.ImportBatchHistorySummary
+import dev.local.artistgallery.model.ArtistHeader
 import kotlinx.coroutines.flow.Flow
 
-data class ArtistWithCollections(
+data class ArtistSummaryRow(
     @Embedded val artist: ArtistEntity,
-    @Relation(parentColumn = "id", entityColumn = "artistId")
-    val collections: List<CollectionEntity>,
+    val collectionCount: Int,
     val imageCount: Int,
     val coverStorageKey: String?,
     val videoCount: Int = 0,
@@ -69,9 +69,9 @@ interface GalleryDao {
 
     @Query("UPDATE ArchiveTask SET selectedNames = :names WHERE id = :id")
     suspend fun updateArchiveVolumes(id: String, names: String)
-    @Transaction
     @Query("""
         SELECT Artist.*,
+            (SELECT COUNT(*) FROM WorkCollection wc WHERE wc.artistId = Artist.id) AS collectionCount,
             (SELECT COUNT(DISTINCT cm.assetId) FROM WorkCollection wc
                 JOIN CollectionMedia cm ON cm.collectionId = wc.id
                 JOIN MediaAsset ma ON ma.id = cm.assetId
@@ -92,11 +92,11 @@ interface GalleryDao {
                 ORDER BY wc.createdAt ASC, cm.manualOrder ASC, cm.assetId ASC LIMIT 1)) AS coverStorageKey
         FROM Artist ORDER BY createdAt ASC, id ASC
     """)
-    fun observeArtists(): Flow<List<ArtistWithCollections>>
+    fun observeArtists(): Flow<List<ArtistSummaryRow>>
 
-    @Transaction
     @Query("""
         SELECT Artist.*,
+            (SELECT COUNT(*) FROM WorkCollection wc WHERE wc.artistId = Artist.id) AS collectionCount,
             (SELECT COUNT(DISTINCT cm.assetId) FROM WorkCollection wc
                 JOIN CollectionMedia cm ON cm.collectionId = wc.id
                 JOIN MediaAsset ma ON ma.id = cm.assetId
@@ -117,7 +117,10 @@ interface GalleryDao {
                 ORDER BY wc.createdAt ASC, cm.manualOrder ASC, cm.assetId ASC LIMIT 1)) AS coverStorageKey
         FROM Artist WHERE id = :id
     """)
-    fun observeArtist(id: String): Flow<ArtistWithCollections?>
+    fun observeArtist(id: String): Flow<ArtistSummaryRow?>
+
+    @Query("SELECT id, name FROM Artist WHERE id = :id")
+    fun observeArtistHeader(id: String): Flow<ArtistHeader?>
 
     @Query("""
         SELECT WorkCollection.*,
@@ -312,6 +315,9 @@ interface GalleryDao {
 
     @Query("UPDATE ImportBatch SET status = :status, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateImportBatch(id: String, status: String, updatedAt: Long)
+
+    @Query("UPDATE ImportBatch SET status = :status, updatedAt = :updatedAt WHERE id = :id AND status != :status")
+    suspend fun updateImportBatchStatusIfChanged(id: String, status: String, updatedAt: Long): Int
 
     @Query("SELECT * FROM ImportItem WHERE status IN ('QUEUED', 'COPYING', 'STAGED', 'FINALIZED') ORDER BY createdAt ASC")
     suspend fun importItemsToRecover(): List<ImportItemEntity>

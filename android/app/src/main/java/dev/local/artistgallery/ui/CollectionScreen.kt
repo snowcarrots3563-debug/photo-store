@@ -62,7 +62,7 @@ fun CollectionScreen(state: GalleryUiState, padding: Dp, previewDecoder: Preview
             stickyHeader { Box(Modifier.testTag(if (state.mediaSelectionMode) "collectionSelectionHeader" else "collectionHeader")) { header() } }
             item {
                 Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${state.artistDetail?.artist?.name.orEmpty()} · ${collection.imageCount} 张图片" + if (collection.videoCount > 0) " · ${collection.videoCount} 个视频" else "",
+                    Text("${state.artistHeader?.name.orEmpty()} · ${collection.imageCount} 张图片" + if (collection.videoCount > 0) " · ${collection.videoCount} 个视频" else "",
                         color = DColors.Muted, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.weight(1f))
                     DIconButton(DIcon.SortArrows, "图集排序", !state.isSaving && !state.mediaSelectionMode,
                         tint = if (sort == MediaSort.Default) DColors.Muted else DColors.Action) {

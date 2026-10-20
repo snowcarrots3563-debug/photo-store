@@ -17,6 +17,7 @@ import dev.local.artistgallery.data.importing.MediaImportSessionState
 import dev.local.artistgallery.data.importing.ImportCompletion
 import dev.local.artistgallery.model.AddReferenceResult
 import dev.local.artistgallery.model.ArtistDetail
+import dev.local.artistgallery.model.ArtistHeader
 import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.MediaSort
 import dev.local.artistgallery.model.sortArtistImages
@@ -473,17 +474,30 @@ class GalleryViewModel(
                             loadState = if (detail == null) LoadState.Failed else LoadState.Ready) }
                     }
                     is GalleryRoute.Collection -> {
-                        var loadedCollection = state.value.collection?.id == route.id && state.value.artistDetail?.artist?.id == route.artistId
-                        combine(repository.observeArtist(route.artistId), repository.observeCollection(route.id)) { artist, collection -> artist to collection }
+                        var loadedCollection = state.value.collection?.id == route.id && state.value.artistHeader?.id == route.artistId
+                        combine(repository.observeArtistHeader(route.artistId), repository.observeCollection(route.id)) { artist, collection -> artist to collection }
                             .collect { (artist, collection) ->
                                 currentCoroutineContext().ensureActive()
                                 if (state.value.route != route) return@collect
+                                parentArtist = if (artist == null) null else parentArtist?.let { cached ->
+                                    val detail = cached.detail
+                                    val known = detail.collections.firstOrNull { it.id == route.id }
+                                    val collections = when {
+                                        known == null -> detail.collections
+                                        collection == null && loadedCollection -> detail.collections.filterNot { it.id == route.id }
+                                        collection != null && collection != known -> detail.collections.map { if (it.id == route.id) collection else it }
+                                        else -> detail.collections
+                                    }
+                                    if (detail.artist.name == artist.name && collections === detail.collections) cached
+                                    else cached.copy(detail = detail.copy(artist = detail.artist.copy(name = artist.name,
+                                        collectionCount = collections.size), collections = collections))
+                                }
                                 if (loadedCollection && collection == null && artist != null) {
                                     parentArtist = parentArtist?.copy(tab = ArtistTab.Collections)
                                     navigate(GalleryRoute.Artist(route.artistId), ArtistTab.Collections, returningToArtist = true)
                                 } else {
                                     if (artist != null && collection != null) loadedCollection = true
-                                    change { it.copy(artistDetail = orderedDetail(artist), collection = collection,
+                                    change { it.copy(artistHeader = artist, collection = collection,
                                         loadState = if (artist == null || collection == null) LoadState.Failed else LoadState.Ready) }
                                 }
                             }
@@ -553,10 +567,12 @@ class GalleryViewModel(
         rawMedia = parent?.let { RawMedia(route, it.presentation.items, it.removedIds) }
         val comicDirection = if (route is GalleryRoute.Collection && savedState.get<String>("comicDirection:${route.id}") == ComicDirection.NameDescending.name)
             ComicDirection.NameDescending else ComicDirection.NameAscending
+        val header = if (route is GalleryRoute.Collection) current.artistDetail?.artist?.takeIf { it.id == route.artistId }
+            ?.let { ArtistHeader(it.id, it.name) } else null
         change { it.copy(route = route, overlay = GalleryOverlay.None, comicDirection = comicDirection, artistTab = parent?.tab ?: tab,
             dialog = GalleryDialog.None, fieldError = null, loadState = if (route == GalleryRoute.Home) homeLoadState else if (parent == null) LoadState.Loading else LoadState.Ready,
             mediaLoadState = if (parentPresentation == null) LoadState.Loading else LoadState.Ready,
-            artistDetail = parent?.let { cached -> current.artistDetail?.takeIf { it.artist.id == cached.id } ?: cached.detail }, collection = null,
+            artistDetail = parent?.detail, artistHeader = header, collection = null,
             preparedMedia = parentPresentation, selectedMediaIds = emptySet(), mediaSelectionMode = false,
             entitySelectionKind = null, selectedEntityIds = emptySet(), browseOptions = displayOptions(route),
             pendingAddAssetIds = emptyList(), importCandidates = emptyList(), importResult = null,

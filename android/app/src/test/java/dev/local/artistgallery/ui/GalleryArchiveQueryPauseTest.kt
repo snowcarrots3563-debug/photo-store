@@ -147,7 +147,8 @@ class GalleryArchiveQueryPauseTest {
         assertEquals(0, repo.collectionMedia.getValue("d").subscriptions)
         vm.setGalleryQueriesPaused(false); runCurrent()
         assertEquals(GalleryRoute.Collection("d", "b"), vm.state.value.route)
-        assertEquals(1, repo.details.getValue("b").subscriptions)
+        assertEquals(0, repo.details.getValue("b").subscriptions)
+        assertEquals(1, repo.headers.getValue("b").subscriptions)
         assertEquals(1, repo.collections.getValue("d").subscriptions)
         assertEquals(1, repo.collectionMedia.getValue("d").subscriptions)
         assertEquals(listOf(image("b-one")), vm.state.value.mediaItems)
@@ -259,6 +260,7 @@ class GalleryArchiveQueryPauseTest {
         second.onEvent(GalleryEvent.OpenCollection("c", "a")); runCurrent()
         second.setGalleryQueriesPaused(true); runCurrent()
         repo.details.getValue("a").publish(null)
+        repo.headers.getValue("a").publish(null)
         repo.collections.getValue("c").publish(null)
         second.setGalleryQueriesPaused(false); runCurrent()
         assertEquals(GalleryRoute.Collection("c", "a"), second.state.value.route)
@@ -377,6 +379,7 @@ class GalleryArchiveQueryPauseTest {
     private class Repository : GalleryRepository {
         val artists = ColdSource(listOf(artist("a"), artist("b")))
         val details = listOf("a", "b").associateWith { ColdSource<ArtistDetail?>(detail(it)) }
+        val headers = listOf("a", "b").associateWith { ColdSource<ArtistHeader?>(ArtistHeader(it, it)) }
         val collections = mapOf("c" to ColdSource<CollectionSummary?>(collection("c", "a")), "d" to ColdSource<CollectionSummary?>(collection("d", "b")))
         val artistImages = mapOf("a" to ColdSource(listOf(image("one"), image("two"))), "b" to ColdSource(listOf(image("b-one"))))
         val collectionMedia = mapOf("c" to ColdSource(listOf(image("one"), image("two"))), "d" to ColdSource(listOf(image("b-one"))))
@@ -393,6 +396,7 @@ class GalleryArchiveQueryPauseTest {
         } as MediaLibraryRepository
         override fun observeArtists() = artists.observe()
         override fun observeArtist(id: String) = details.getValue(id).observe()
+        override fun observeArtistHeader(id: String) = headers.getValue(id).observe()
         override fun observeCollection(id: String) = collections.getValue(id).observe()
         override suspend fun createArtist(name: String): SaveResult = error("Browsing must not write")
         override suspend fun renameArtist(id: String, name: String): SaveResult = error("Browsing must not write")

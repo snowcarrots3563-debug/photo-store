@@ -27,7 +27,7 @@ import org.junit.runner.RunWith
 class GalleryArchiveQueryRoomTest {
     private val queryExecutor = Executors.newSingleThreadExecutor()
     private val transactionExecutor = Executors.newSingleThreadExecutor()
-    private val queries = listOf("home", "artist", "collections", "collection", "artistMedia", "collectionMedia", "unassigned")
+    private val queries = listOf("home", "artist", "header", "collections", "collection", "artistMedia", "collectionMedia", "unassigned")
         .associateWith { AtomicInteger() }
     private val viewModels = ViewModelStore()
     private lateinit var database: GalleryDatabase
@@ -62,7 +62,7 @@ class GalleryArchiveQueryRoomTest {
     }
 
     @Test fun thousandWritesCannotQueryCoveredCollectionListsAndResumeReadsLatest() = runBlocking {
-        verifyPause(GalleryRoute.Collection("c", "a"), listOf("home", "artist", "collections", "collection", "collectionMedia"))
+        verifyPause(GalleryRoute.Collection("c", "a"), listOf("home", "header", "collection", "collectionMedia"))
     }
 
     @Test fun thousandWritesCannotQueryCoveredUnassignedListAndResumeReadsLatest() = runBlocking {
@@ -91,6 +91,10 @@ class GalleryArchiveQueryRoomTest {
         }
         drainQueries()
         activeQueries.forEach { assertTrue("Expected initial $it SQL", queries.getValue(it).get() > 0) }
+        if (route is GalleryRoute.Collection) {
+            assertEquals(0, queries.getValue("artist").get())
+            assertEquals(0, queries.getValue("collections").get())
+        }
         val loaded = model.state.value
         withContext(Dispatchers.Main) { model.setGalleryQueriesPaused(true) }
         drainQueries()
@@ -100,6 +104,7 @@ class GalleryArchiveQueryRoomTest {
         assertEquals("Covered cold subscriptions must execute no further list SQL", pausedQueries, snapshot())
         assertSame(loaded.artists, model.state.value.artists)
         assertSame(loaded.artistDetail, model.state.value.artistDetail)
+        assertSame(loaded.artistHeader, model.state.value.artistHeader)
         assertSame(loaded.mediaItems, model.state.value.mediaItems)
         withContext(Dispatchers.Main) {
             model.setGalleryQueriesPaused(false)
@@ -111,12 +116,17 @@ class GalleryArchiveQueryRoomTest {
             model.state.first { current ->
                 current.route == route && current.loadState == LoadState.Ready && current.mediaLoadState == LoadState.Ready &&
                     current.mediaItems.size == 1001 && (route == GalleryRoute.Unassigned ||
-                    current.artistDetail?.artist?.imageCount == 1001 && current.artists.singleOrNull()?.imageCount == 1001)
+                    (if (route is GalleryRoute.Collection) current.collection?.imageCount == 1001
+                        else current.artistDetail?.artist?.imageCount == 1001) && current.artists.singleOrNull()?.imageCount == 1001)
             }
         }
         drainQueries()
         activeQueries.forEach { assertTrue("Resume must query latest $it data", queries.getValue(it).get() > pausedQueries.getValue(it)) }
         assertEquals(1001, model.state.value.mediaItems.size)
+        if (route is GalleryRoute.Collection) {
+            assertEquals(0, queries.getValue("artist").get())
+            assertEquals(0, queries.getValue("collections").get())
+        }
     }
 
     private suspend fun insertMedia(index: Int, referenced: Boolean) {
@@ -145,6 +155,7 @@ class GalleryArchiveQueryRoomTest {
         return when {
             sql.startsWith("SELECT Artist.*") && sql.endsWith("FROM Artist ORDER BY createdAt ASC, id ASC") -> "home"
             sql.startsWith("SELECT Artist.*") && sql.endsWith("FROM Artist WHERE id = ?") -> "artist"
+            sql == "SELECT id, name FROM Artist WHERE id = ?" -> "header"
             sql.startsWith("SELECT WorkCollection.*") && sql.endsWith("FROM WorkCollection WHERE artistId = ? ORDER BY createdAt ASC, id ASC") -> "collections"
             sql.startsWith("SELECT WorkCollection.*") && sql.endsWith("FROM WorkCollection WHERE id = ?") -> "collection"
             sql.startsWith("SELECT ma.*") && sql.contains("WHERE wc.artistId = ?") && sql.contains("GROUP BY ma.id") -> "artistMedia"
