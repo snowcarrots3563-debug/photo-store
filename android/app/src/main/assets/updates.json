@@ -1,5 +1,13 @@
 [
   {
+    "versionCode": 20,
+    "versionName": "0.2.9",
+    "date": "2026-10-21",
+    "changes": [
+      "【优化】首页读取时显示卡片骨架扫光，完成后平滑显示画师。"
+    ]
+  },
+  {
     "versionCode": 19,
     "versionName": "0.2.8",
     "date": "2026-10-21",

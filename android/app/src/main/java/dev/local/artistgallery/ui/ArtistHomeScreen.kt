@@ -10,6 +10,8 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Text
 import androidx.compose.material3.Checkbox
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -21,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -36,6 +39,14 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ArtistHomeScreen(state: GalleryUiState, padding: Dp, scrollToArtist: String?, scrolled: () -> Unit, fixtureCover: (@Composable (SampleCoverKey) -> Unit)?, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit) {
+    val contentAlpha = remember { Animatable(if (state.loadState == LoadState.Loading) 0f else 1f) }
+    LaunchedEffect(state.loadState) {
+        when (state.loadState) {
+            LoadState.Loading -> contentAlpha.snapTo(0f)
+            LoadState.Ready -> if (contentAlpha.value < 1f) contentAlpha.animateTo(1f, tween(250))
+            LoadState.Failed -> contentAlpha.snapTo(1f)
+        }
+    }
     val scrollState = rememberLazyListState()
     val scrollScope = rememberCoroutineScope()
     var scrollTopJob by remember { mutableStateOf<Job?>(null) }
@@ -83,7 +94,8 @@ fun ArtistHomeScreen(state: GalleryUiState, padding: Dp, scrollToArtist: String?
             item(key = "section") {
                 Text("我的画师", color = DColors.Muted, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.padding(start = 16.dp, top = 28.dp, bottom = 10.dp))
             }
-            if (state.loadState != LoadState.Ready) item(key = "load") { dLoadState(state.loadState) { onEvent(GalleryEvent.RetryLoad) } }
+            if (state.loadState == LoadState.Loading) item(key = "load") { HomeLoadingSkeleton() }
+            else if (state.loadState == LoadState.Failed) item(key = "load") { dLoadState(state.loadState) { onEvent(GalleryEvent.RetryLoad) } }
             else if (state.artists.isEmpty()) item(key = "empty") { DEmpty("还没有画师", "先添加一位画师，再创建作品集。", "添加画师", DIcon.Artist) { onEvent(GalleryEvent.OpenDialog(GalleryDialog.AddArtist())) } }
             else if (artists.isEmpty()) item(key = "empty") { DEmpty("没有找到画师", "试试更短的名字，或清除搜索。", "清除搜索") { onEvent(GalleryEvent.ClearSearch) } }
             else itemsIndexed(reorder.order, key = { _, id -> "artist:$id" }) { index, id ->
@@ -91,7 +103,7 @@ fun ArtistHomeScreen(state: GalleryUiState, padding: Dp, scrollToArtist: String?
                 val requester = remember { BringIntoViewRequester() }
                 LaunchedEffect(scrollToArtist, artist.id) { if (scrollToArtist == artist.id) { requester.bringIntoView(); scrolled() } }
                 val isSelected = artist.id in state.selectedEntityIds
-                ReorderRow(reorder, artist.id, Modifier.bringIntoViewRequester(requester).testTag("artistRow:${artist.id}").semantics {
+                ReorderRow(reorder, artist.id, Modifier.bringIntoViewRequester(requester).testTag("artistRow:${artist.id}").graphicsLayer { alpha = contentAlpha.value }.semantics {
                     if (selecting) {
                         selected = isSelected
                         toggleableState = if (isSelected) ToggleableState.On else ToggleableState.Off
