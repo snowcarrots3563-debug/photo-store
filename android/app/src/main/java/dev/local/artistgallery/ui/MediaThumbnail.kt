@@ -50,13 +50,17 @@ fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewD
             previewDecoder?.cachedThumbnail(storageKey, size.width, size.height, type)
         } else null)
     }
-    var preview by remember(storageKey, type, previewDecoder, size, focusOnLoad) { mutableStateOf<Bitmap?>(null) }
+    var preview by remember(storageKey, type, previewDecoder, size, focusOnLoad) {
+        mutableStateOf<Bitmap?>(if (focusOnLoad && type != MediaType.VIDEO && image == null) {
+            previewDecoder?.cachedGaussianPreview(storageKey, type)
+        } else null)
+    }
     val clarity = remember(storageKey, type, previewDecoder, size, focusOnLoad) { Animatable(0f) }
     LaunchedEffect(storageKey, type, previewDecoder, size, focusOnLoad) {
         if (size.width > 0 && size.height > 0 && image == null) {
             try {
                 if (focusOnLoad && type != MediaType.VIDEO) {
-                    preview = try { previewDecoder?.decodeThumbnail(storageKey, 12, 12, type) }
+                    preview = preview ?: try { previewDecoder?.decodeGaussianPreview(storageKey, type) }
                     catch (error: CancellationException) { throw error }
                     catch (_: Exception) { null }
                 }

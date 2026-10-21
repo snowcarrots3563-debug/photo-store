@@ -62,11 +62,12 @@ class MediaThumbnailFocusUiTest {
 
     @Test fun coldLoadKeepsSameColorPreviewAndRevealsDetailWithoutMovingTheCell() = runBlocking {
         val key = png(pattern = true)
-        assertNull(decoder.cachedThumbnail(key, 12, 12))
+        assertNull(decoder.cachedGaussianPreview(key))
+        val gaussian = requireNotNull(decoder.decodeGaussianPreview(key))
         show(key)
         waitForFinal(key)
         compose.mainClock.advanceTimeByFrame()
-        val tiny = requireNotNull(decoder.cachedThumbnail(key, 12, 12))
+        assertSame(gaussian, decoder.cachedGaussianPreview(key))
         val beforeBounds = compose.onNodeWithTag("thumbnail").fetchSemanticsNode().boundsInRoot
         val blurred = capture()
         val left = blurred.toPixelMap()[blurred.width / 4, blurred.height / 2]
@@ -79,31 +80,31 @@ class MediaThumbnailFocusUiTest {
         val clear = capture()
         assertTrue("Clear image must reveal finer stripes", detail(clear) > detail(blurred) * 2 + .01f)
         assertEquals(beforeBounds, compose.onNodeWithTag("thumbnail").fetchSemanticsNode().boundsInRoot)
-        assertEquals(12, tiny.width)
-        assertEquals(12, tiny.height)
-        assertFalse(tiny.isRecycled)
+        assertEquals(96, gaussian.width)
+        assertEquals(96, gaussian.height)
+        assertFalse(gaussian.isRecycled)
     }
 
-    @Test fun fullCacheIsImmediatelyVisibleWithoutTinyReadEvenAfterSourceRemoval() = runBlocking {
+    @Test fun fullCacheIsImmediatelyVisibleWithoutGaussianReadEvenAfterSourceRemoval() = runBlocking {
         val key = png(Color.RED)
         val cached = requireNotNull(decoder.decodeThumbnail(key, targetPx, targetPx))
         assertTrue(files.deleteOriginal(key))
         show(key)
         val pixel = capture().toPixelMap()[targetPx / 2, targetPx / 2]
         assertTrue(pixel.red > .9f && pixel.blue < .1f)
-        assertNull(decoder.cachedThumbnail(key, 12, 12))
+        assertNull(decoder.cachedGaussianPreview(key))
         assertSame(cached, decoder.cachedThumbnail(key, targetPx, targetPx))
         assertFalse(cached.isRecycled)
     }
 
-    @Test fun defaultThumbnailCallDoesNotRequestTheTinyPreview() = runBlocking {
+    @Test fun defaultThumbnailCallDoesNotRequestGaussianPreview() = runBlocking {
         val key = png(Color.BLUE)
         show(key, focus = false)
         waitForFinal(key)
         compose.mainClock.advanceTimeByFrame()
         val pixel = capture().toPixelMap()[targetPx / 2, targetPx / 2]
         assertTrue(pixel.blue > .9f && pixel.red < .1f)
-        assertNull(decoder.cachedThumbnail(key, 12, 12))
+        assertNull(decoder.cachedGaussianPreview(key))
     }
 
     @Test fun replacingTheKeyDoesNotShowThePreviousCachedColor() = runBlocking {
@@ -117,12 +118,12 @@ class MediaThumbnailFocusUiTest {
         compose.mainClock.advanceTimeByFrame()
         val pixel = capture().toPixelMap()[targetPx / 2, targetPx / 2]
         assertTrue(pixel.blue > .9f && pixel.red < .1f)
-        assertNull(decoder.cachedThumbnail(blue, 12, 12))
+        assertNull(decoder.cachedGaussianPreview(blue))
     }
 
     @Test fun translucentArtworkHasNoOpaquePreviewJumpAtTheEnd() = runBlocking {
         val key = png(0x80FF0000.toInt())
-        decoder.decodeThumbnail(key, 12, 12)
+        decoder.decodeGaussianPreview(key)
         show(key)
         waitForFinal(key)
         compose.mainClock.advanceTimeByFrame()
@@ -136,7 +137,7 @@ class MediaThumbnailFocusUiTest {
         }
         val settled = previous
         assertTrue("Fixture must remain translucent", settled.green > .3f && settled.blue > .3f)
-        assertTrue("Removing the tiny layer must not change artwork opacity abruptly",
+        assertTrue("Removing the Gaussian layer must not change artwork opacity abruptly",
             largestStep < .12f)
     }
 
@@ -146,7 +147,7 @@ class MediaThumbnailFocusUiTest {
         val videoDecoder = PreviewDecoder(compose.activity.contentResolver, fixture.reader)
         show(key, type = MediaType.VIDEO, previewDecoder = videoDecoder)
         waitForFinal(key, videoDecoder, MediaType.VIDEO)
-        assertNull(videoDecoder.cachedThumbnail(key, 12, 12, MediaType.VIDEO))
+        assertNull(videoDecoder.cachedGaussianPreview(key, MediaType.VIDEO))
     }
 
     private fun show(key: String, focus: Boolean = true, type: MediaType = MediaType.IMAGE, previewDecoder: PreviewDecoder = decoder) {

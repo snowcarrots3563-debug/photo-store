@@ -23,6 +23,7 @@ data class StagedFile(val byteSize: Long, val sha256: String)
 
 class MediaFileStore(context: Context) {
     private val root = context.getExternalFilesDir(null)
+    private val gaussianPreviews = File(context.cacheDir, "gaussian-previews-v1")
     private val contentResolver = context.contentResolver
 
     fun availableBytes(): Long = StatFs(requireRoot().absolutePath).availableBytes
@@ -164,10 +165,16 @@ class MediaFileStore(context: Context) {
 
     suspend fun deleteOriginal(storageKey: String) = withContext(Dispatchers.IO) {
         val file = originalFile(storageKey)
-        !file.exists() || file.delete()
+        val deleted = !file.exists() || file.delete()
+        if (deleted) {
+            try { gaussianPreviewFile(storageKey).delete() } catch (_: SecurityException) { }
+        }
+        deleted
     }
 
     fun originalFile(storageKey: String): File = File(originalsDirectory(), uuid(storageKey))
+
+    fun gaussianPreviewFile(storageKey: String): File = File(gaussianPreviews, uuid(storageKey) + ".png")
 
     fun stagingFile(stagingKey: String): File = File(stagingDirectory(), uuid(stagingKey) + ".part")
 

@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.core.animate
@@ -51,6 +52,11 @@ import androidx.compose.ui.semantics.disabled
 import dev.local.artistgallery.data.ArtistImageLayout
 import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.model.SampleCoverKey
+import dev.local.artistgallery.model.MediaType
+import kotlin.math.ceil
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -169,7 +175,39 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                     }
                 }
             }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { reorder.viewport = it.boundsInRoot() }.nestedScroll(tabScrollConnection).testTag("artistMediaList"), state = listState, contentPadding = PaddingValues(start = padding, end = padding, bottom = 126.dp)) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val tileSize = ((maxWidth - padding * 2 - 3.dp * (columns - 1)) / columns).coerceAtLeast(1.dp)
+                val viewportRows = ceil(maxHeight.value / tileSize.value).toInt() + 2
+                val needsGridPreviews = state.artistTab == ArtistTab.Images && prepared.layout != ArtistImageLayout.List &&
+                    previewDecoder != null && gridRows.isNotEmpty()
+                var initialGridReady by remember(previewDecoder) { mutableStateOf(false) }
+                LaunchedEffect(gridRows, previewDecoder, viewportRows, needsGridPreviews) {
+                    val decoder = previewDecoder ?: return@LaunchedEffect
+                    if (!needsGridPreviews) return@LaunchedEffect
+                    suspend fun prepareRows(start: Int, end: Int) {
+                        for (index in start until end) {
+                            for (tile in gridRows[index].tiles) {
+                                if (tile.media.type == MediaType.VIDEO) continue
+                                try { decoder.decodeGaussianPreview(tile.media.storageKey, tile.media.type) }
+                                catch (error: CancellationException) { throw error }
+                                catch (_: Exception) { /* A damaged original keeps its existing failure placeholder. */ }
+                            }
+                        }
+                    }
+                    snapshotFlow { listState.firstVisibleItemIndex }.distinctUntilChanged().collectLatest { index ->
+                        // LazyColumn may fill preceding rows when restoring near the end.
+                        val start = index.coerceIn(0, gridRows.lastIndex).coerceAtMost((gridRows.size - viewportRows).coerceAtLeast(0))
+                        val end = (start + viewportRows).coerceAtMost(gridRows.size)
+                        prepareRows(start, end)
+                        initialGridReady = true
+                        prepareRows(end, (end + viewportRows).coerceAtMost(gridRows.size))
+                    }
+                }
+                if (needsGridPreviews && !initialGridReady) {
+                    Box(Modifier.fillMaxSize().testTag("artistGridPreviewLoading"), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(28.dp), color = DColors.Action, strokeWidth = 3.dp)
+                    }
+                } else LazyColumn(Modifier.fillMaxSize().onGloballyPositioned { reorder.viewport = it.boundsInRoot() }.nestedScroll(tabScrollConnection).testTag("artistMediaList"), state = listState, contentPadding = PaddingValues(start = padding, end = padding, bottom = 126.dp)) {
                 if (state.artistTab == ArtistTab.Images) {
                     if (state.mediaItems.isEmpty()) item {
                         val defaultName = detail.collections.firstOrNull { it.isDefault }?.name ?: "默认图集"
@@ -258,6 +296,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                         }
                     }
                 }
+            }
             }
         }
     }

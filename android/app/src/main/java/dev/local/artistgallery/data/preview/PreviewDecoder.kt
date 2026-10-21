@@ -19,7 +19,9 @@ import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.SystemClock
 import android.util.LruCache
+import androidx.core.graphics.createBitmap
 import dev.local.artistgallery.model.MediaType
+import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import kotlin.math.max
@@ -43,10 +45,83 @@ class PreviewDecoder(
         override fun sizeOf(key: ThumbnailKey, value: Bitmap): Int = value.allocationByteCount
     }
     private val thumbnailDecodes = Semaphore(2)
+    private val gaussianDecodes = Semaphore(1)
+    private val gaussianCache = object : LruCache<ThumbnailKey, Bitmap>(4 * 1024 * 1024) {
+        override fun sizeOf(key: ThumbnailKey, value: Bitmap): Int = value.allocationByteCount
+    }
     private val largeDecodes = PreviewDecodeGate()
 
     fun cachedThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int, type: MediaType = MediaType.IMAGE): Bitmap? =
         thumbnailCache.get(ThumbnailKey(storageKey, targetWidthPx, targetHeightPx, type))
+
+    fun cachedGaussianPreview(storageKey: String, type: MediaType = MediaType.IMAGE): Bitmap? =
+        if (type == MediaType.VIDEO) null else gaussianCache.get(ThumbnailKey(storageKey, 96, 96, type))
+
+    suspend fun decodeGaussianPreview(storageKey: String, type: MediaType = MediaType.IMAGE): Bitmap? {
+        if (type == MediaType.VIDEO) return null
+        val key = ThumbnailKey(storageKey, 96, 96, type)
+        gaussianCache.get(key)?.let { return it }
+        return withContext(Dispatchers.IO) {
+            gaussianDecodes.withPermit {
+                currentCoroutineContext().ensureActive()
+                gaussianCache.get(key)?.let { return@withPermit it }
+                val file = assetReader.gaussianPreviewFile(storageKey)
+                val cached = readGaussianPreview(file)
+                val preview = cached ?: run {
+                    val source = decodeThumbnail(storageKey, 96, 96, type) ?: return@withPermit null
+                    val pixels = IntArray(96 * 96)
+                    if (source.width == 96 && source.height == 96) {
+                        source.getPixels(pixels, 0, 96, 0, 0, 96, 96)
+                    } else {
+                        val square = createBitmap(96, 96)
+                        try {
+                            val side = min(source.width, source.height)
+                            val left = (source.width - side) / 2
+                            val top = (source.height - side) / 2
+                            Canvas(square).drawBitmap(source, Rect(left, top, left + side, top + side),
+                                Rect(0, 0, 96, 96), Paint(Paint.FILTER_BITMAP_FLAG))
+                            square.getPixels(pixels, 0, 96, 0, 0, 96, 96)
+                        } finally { square.recycle() }
+                    }
+                    val context = currentCoroutineContext()
+                    val blurred = gaussianBlur(pixels, 96, 96) { context.ensureActive() }
+                    Bitmap.createBitmap(blurred, 96, 96, Bitmap.Config.ARGB_8888)
+                }
+                currentCoroutineContext().ensureActive()
+                preview.prepareToDraw()
+                gaussianCache.put(key, preview)
+                if (cached == null) writeGaussianPreview(file, preview)
+                preview
+            }
+        }
+    }
+
+    private fun readGaussianPreview(file: File): Bitmap? = try {
+        if (file.isFile) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth == 96 && bounds.outHeight == 96) BitmapFactory.decodeFile(file.absolutePath) else null
+        } else null
+    } catch (_: IOException) { null } catch (_: SecurityException) { null }
+
+    private suspend fun writeGaussianPreview(file: File, bitmap: Bitmap) {
+        var temporary: File? = null
+        try {
+            val directory = requireNotNull(file.parentFile)
+            if (!directory.isDirectory && !directory.mkdirs()) return
+            temporary = File.createTempFile(".${file.name}.", ".tmp", directory)
+            temporary.outputStream().buffered().use { output ->
+                if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) return
+            }
+            currentCoroutineContext().ensureActive()
+            temporary.renameTo(file)
+        } catch (_: IOException) {
+            // A derived disk cache failure must not discard the in-memory preview.
+        } catch (_: SecurityException) {
+        } finally {
+            try { temporary?.delete() } catch (_: SecurityException) { }
+        }
+    }
 
     suspend fun decodeThumbnail(storageKey: String, targetWidthPx: Int, targetHeightPx: Int, type: MediaType = MediaType.IMAGE): Bitmap? {
         val key = ThumbnailKey(storageKey, targetWidthPx, targetHeightPx, type)

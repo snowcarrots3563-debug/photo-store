@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.core.content.FileProvider
 import dev.local.artistgallery.data.importing.MediaFileStore
+import java.io.File
 import java.io.FileNotFoundException
 import java.util.UUID
 
@@ -11,6 +12,8 @@ class AssetReader(
     private val context: Context,
     private val mediaFiles: MediaFileStore,
 ) {
+    fun gaussianPreviewFile(storageKey: String): File = mediaFiles.gaussianPreviewFile(storageKey)
+
     fun contentUri(storageKey: String, displayName: String? = null): Uri {
         val normalizedKey = try {
             UUID.fromString(storageKey).toString()
