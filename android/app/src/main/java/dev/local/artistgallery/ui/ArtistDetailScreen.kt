@@ -212,7 +212,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                                                     if (state.mediaSelectionMode) onEvent(GalleryEvent.ToggleMediaSelection(media.id))
                                                     else { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) }
                                                 })) {
-                                            MediaThumbnail(media.storageKey, media.type, previewDecoder, Modifier.fillMaxSize(), cornerRadius = 0.dp)
+                                            MediaThumbnail(media.storageKey, media.type, previewDecoder, Modifier.fillMaxSize(), cornerRadius = 0.dp, focusOnLoad = true)
                                             if (state.mediaSelectionMode) {
                                                 Box(Modifier.align(Alignment.TopEnd).padding(4.dp).clip(RoundedCornerShape(6.dp)).background(DColors.Panel)) {
                                                     Checkbox(checked = selected, onCheckedChange = null)

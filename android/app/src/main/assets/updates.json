@@ -1,5 +1,13 @@
 [
   {
+    "versionCode": 18,
+    "versionName": "0.2.7",
+    "date": "2026-10-21",
+    "changes": [
+      "【优化】画师图片网格先显示同色模糊预览，再平滑变清晰。"
+    ]
+  },
+  {
     "versionCode": 17,
     "versionName": "0.2.6",
     "date": "2026-10-20",

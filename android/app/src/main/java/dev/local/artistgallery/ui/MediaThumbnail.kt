@@ -3,6 +3,8 @@ package dev.local.artistgallery.ui
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.widget.ImageView
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -23,7 +25,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -39,28 +43,41 @@ import dev.local.artistgallery.model.MediaType
 import kotlinx.coroutines.CancellationException
 
 @Composable
-fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp) {
+fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp, focusOnLoad: Boolean = false) {
     var size by remember { mutableStateOf(IntSize.Zero) }
-    var image by remember(storageKey, type, previewDecoder, size) {
+    var image by remember(storageKey, type, previewDecoder, size, focusOnLoad) {
         mutableStateOf<Bitmap?>(if (size.width > 0 && size.height > 0) {
             previewDecoder?.cachedThumbnail(storageKey, size.width, size.height, type)
         } else null)
     }
-    LaunchedEffect(storageKey, type, previewDecoder, size) {
-        if (size.width > 0 && size.height > 0) {
-            image = try {
-                previewDecoder?.decodeThumbnail(storageKey, size.width, size.height, type)
+    var preview by remember(storageKey, type, previewDecoder, size, focusOnLoad) { mutableStateOf<Bitmap?>(null) }
+    val clarity = remember(storageKey, type, previewDecoder, size, focusOnLoad) { Animatable(0f) }
+    LaunchedEffect(storageKey, type, previewDecoder, size, focusOnLoad) {
+        if (size.width > 0 && size.height > 0 && image == null) {
+            try {
+                if (focusOnLoad && type != MediaType.VIDEO) {
+                    preview = try { previewDecoder?.decodeThumbnail(storageKey, 12, 12, type) }
+                    catch (error: CancellationException) { throw error }
+                    catch (_: Exception) { null }
+                }
+                image = previewDecoder?.decodeThumbnail(storageKey, size.width, size.height, type)
+                if (image != null && preview != null) clarity.animateTo(1f, tween(350))
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                null
+                image = null
             }
+            preview = null
         }
     }
     Box(modifier.onSizeChanged { size = it }.clip(RoundedCornerShape(cornerRadius)).background(Color(0xFFEFF1F5)), contentAlignment = Alignment.Center) {
+        preview?.let { Image(it.asImageBitmap(), contentDescription = null,
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = ((1f - clarity.value) / .2f).coerceIn(0f, 1f) },
+            contentScale = ContentScale.Crop, filterQuality = FilterQuality.High) }
         val bitmap = image
-        if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        else DIconImage(if (type == MediaType.VIDEO) DIcon.Play else DIcon.Image, Color(0xFF969EAD))
+        if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null,
+            modifier = if (preview != null) Modifier.fillMaxSize().graphicsLayer { alpha = clarity.value } else Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        else if (preview == null) DIconImage(if (type == MediaType.VIDEO) DIcon.Play else DIcon.Image, Color(0xFF969EAD))
         if (type == MediaType.VIDEO && bitmap != null) {
             Box(Modifier.size(40.dp).background(Color.Black.copy(alpha = .5f), CircleShape), contentAlignment = Alignment.Center) {
                 DIconImage(DIcon.Play, Color.White)
