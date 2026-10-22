@@ -15,6 +15,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -271,12 +273,14 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                 } else itemsIndexed(reorder.order, key = { _, id -> "collection:$id" }) { index, id ->
                     val c = collectionsById[id] ?: return@itemsIndexed
                     val isSelected = c.id in state.selectedEntityIds
-                    ReorderRow(reorder, c.id, Modifier.testTag("collectionRow:${c.id}").semantics {
+                    ReorderRow(reorder, c.id, Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null,
+                        placementSpec = if (selectingCollections && reorder.draggedId != c.id && reorder.settlingId != c.id) spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = .85f) else null)
+                        .testTag("collectionRow:${c.id}").semantics {
                         if (selectingCollections && !c.isDefault) {
                             selected = isSelected
                             toggleableState = if (isSelected) ToggleableState.On else ToggleableState.Off
                         }
-                    }) {
+                    }, itemKey = "collection:${c.id}") {
                         DGroupRow(index == 0, index == reorder.order.lastIndex) {
                             if (index > 0) DDivider()
                             DRow(c.name, "${c.imageCount} 张图片" + if (c.videoCount > 0) " · ${c.videoCount} 个视频" else "", cover = c.cover, fixtureCover = fixtureCover, previewDecoder = previewDecoder,

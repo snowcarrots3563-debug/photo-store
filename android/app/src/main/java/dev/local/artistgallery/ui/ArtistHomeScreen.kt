@@ -12,6 +12,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.Text
 import androidx.compose.material3.Checkbox
@@ -109,12 +111,14 @@ fun ArtistHomeScreen(state: GalleryUiState, padding: Dp, scrollToArtist: String?
                 val requester = remember { BringIntoViewRequester() }
                 LaunchedEffect(scrollToArtist, artist.id) { if (scrollToArtist == artist.id) { requester.bringIntoView(); scrolled() } }
                 val isSelected = artist.id in state.selectedEntityIds
-                ReorderRow(reorder, artist.id, Modifier.bringIntoViewRequester(requester).testTag("artistRow:${artist.id}").semantics {
+                ReorderRow(reorder, artist.id, Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null,
+                    placementSpec = if (selecting && reorder.draggedId != artist.id && reorder.settlingId != artist.id) spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = .85f) else null)
+                    .bringIntoViewRequester(requester).testTag("artistRow:${artist.id}").semantics {
                     if (selecting) {
                         selected = isSelected
                         toggleableState = if (isSelected) ToggleableState.On else ToggleableState.Off
                     }
-                }) {
+                }, itemKey = "artist:${artist.id}") {
                     DGroupRow(index == 0, index == reorder.order.lastIndex) {
                         if (index > 0) DDivider()
                         Box {

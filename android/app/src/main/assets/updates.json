@@ -1,5 +1,13 @@
 [
   {
+    "versionCode": 21,
+    "versionName": "0.2.10",
+    "date": "2026-10-22",
+    "changes": [
+      "【优化】画师与作品集拖动排序时连续让位，松手平稳落下。"
+    ]
+  },
+  {
     "versionCode": 20,
     "versionName": "0.2.9",
     "date": "2026-10-21",

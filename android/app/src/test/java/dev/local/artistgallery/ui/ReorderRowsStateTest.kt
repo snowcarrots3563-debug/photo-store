@@ -113,4 +113,86 @@ class ReorderRowsStateTest {
         assertEquals(listOf("a", "b", "c", "d"), state.order)
         assertTrue(commits.isEmpty())
     }
+
+    @Test fun releaseKeepsTheFingerPositionAcrossTheFinalSlotMeasurement() {
+        val state = rows()
+        val commits = mutableListOf<List<String>>()
+        state.start("a", 30f)
+        state.move(130f)
+        state.finish { commits.add(it) }
+        assertEquals("a", state.settlingId)
+        assertEquals(130f, state.translation("a"), .01f)
+        state.rowBounds["a"] = Rect(0f, 120f, 200f, 180f)
+        assertEquals(130f, state.rowBounds.getValue("a").top + state.translation("a"), .01f)
+        val generation = state.settleGeneration
+        state.settle(generation, .5f)
+        assertEquals(5f, state.translation("a"), .01f)
+        state.settle(generation, 0f)
+        state.completeSettle(generation)
+        assertNull(state.settlingId)
+        assertEquals(0f, state.translation("a"), .01f)
+        state.finish { commits.add(it) }
+        assertEquals(listOf(listOf("b", "a", "c", "d")), commits)
+    }
+
+    @Test fun cancellationRollsBackWithoutDroppingTheRowBeforeItCanLand() {
+        val state = rows()
+        state.start("a", 30f)
+        state.move(130f)
+        state.rowBounds["a"] = Rect(0f, 120f, 200f, 180f)
+        state.cancel()
+        assertEquals(listOf("a", "b", "c", "d"), state.order)
+        assertEquals(130f, state.rowBounds.getValue("a").top + state.translation("a"), .01f)
+        state.rowBounds["a"] = Rect(0f, 0f, 200f, 60f)
+        assertEquals(130f, state.translation("a"), .01f)
+        state.settle(state.settleGeneration, .5f)
+        assertEquals(65f, state.translation("a"), .01f)
+        state.finish { fail("A cancelled landing cannot commit") }
+    }
+
+    @Test fun aNewDragContinuesFromTheCurrentLandingPositionAndRejectsOldFrames() {
+        val state = rows()
+        state.start("a", 30f)
+        state.move(50f)
+        state.finish { fail("No crossing") }
+        val oldGeneration = state.settleGeneration
+        state.settle(oldGeneration, .5f)
+        state.start("a", 55f)
+        assertNull(state.settlingId)
+        assertEquals(25f, state.translation("a"), .01f)
+        state.settle(oldGeneration, 0f)
+        state.completeSettle(oldGeneration)
+        assertEquals("a", state.draggedId)
+        assertEquals(25f, state.translation("a"), .01f)
+    }
+
+    @Test fun disablingMembershipChangeAndDisposalClearLandingState() {
+        val state = rows()
+        state.start("a", 30f)
+        state.move(50f)
+        state.finish {}
+        state.update(state.order, enabled = false)
+        assertNull(state.settlingId)
+        state.start("b", 90f)
+        state.move(20f)
+        state.finish {}
+        state.update(listOf("a", "b", "d"), enabled = true)
+        assertNull(state.settlingId)
+        state.start("b", 90f)
+        state.move(20f)
+        state.finish {}
+        state.removeRow("b")
+        assertNull(state.settlingId)
+        assertFalse(state.rowBounds.containsKey("b"))
+    }
+
+    @Test fun startingAnAnimatingNeighborUsesItsVisualTopOnlyForThePickup() {
+        val state = rows()
+        state.measure("b", "b", Rect(0f, 80f, 200f, 200f))
+        state.rowBounds["b"] = Rect(0f, 60f, 200f, 180f)
+        state.start("b", 110f)
+        assertEquals(20f, state.translation("b"), .01f)
+        state.move(-20f)
+        assertEquals(0f, state.translation("b"), .01f)
+    }
 }
