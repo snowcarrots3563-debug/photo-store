@@ -24,6 +24,13 @@ enum class DIcon(val path: String) {
     Select("M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5m-8-9 3 3 6-6"),
     Info("M12 11v6M12 7h.01M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0"),
     Archive("M3 3h18v5H3zM5 8v13h14V8M9 12h6"), Check("M5 12.5 9.5 17 19 7"),
+    Card("M5 3h14v18H5zM8 7h8M8 11h5M15 15l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"),
+    Gif("M3 5h18v14H3zM7 9H5v6h3v-3H7M11 9v6M15 15V9h4M15 12h3"),
+    Swipe("M3 12h16m-4-4 4 4-4 4M6 5H3v3M6 19H3v-3"),
+    Video("M3 5h13v14H3zM16 9l5-3v12l-5-3M7 9l5 3-5 3z"),
+    Backup("M4 8l8-5 8 5v11H4zM4 8l8 5 8-5M12 13v6"),
+    Restore("M4 9a8 8 0 1 1 1 9M4 4v5h5M12 8v5l3 2"),
+    History("M4 3h12l4 4v14H4zM15 3v5h5M8 11h8M8 15h8M8 18h5"),
     Play("M8 5v14l11-7z"), Pause("M8 5v14M16 5v14");
     val vectorPath by lazy { PathParser().parsePathString(path).toPath() }
 }

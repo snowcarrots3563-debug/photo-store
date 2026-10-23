@@ -24,26 +24,31 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.local.artistgallery.model.VersionUpdate
 
 @Composable
-fun UpdateNotesDialog(updates: List<VersionUpdate>, showAll: Boolean = false, onDismiss: () -> Unit) {
+fun UpdateNotesDialog(updates: List<VersionUpdate>, showAll: Boolean = false, visible: Boolean = true, onDismiss: () -> Unit) {
+    DAnimatedDialog((updates to showAll).takeIf { visible }, onDismiss) { model, panel, fraction ->
+        UpdateNotesContent(model.first, model.second, onDismiss, panel, fraction)
+    }
+}
+
+@Composable
+internal fun UpdateNotesContent(updates: List<VersionUpdate>, showAll: Boolean, onDismiss: () -> Unit, modifier: Modifier, fraction: Float) {
     val title = if (showAll) "应用更新日志" else "更新内容"
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(decorFitsSystemWindows = false)) {
+    run {
         val dialogInsets = galleryDialogWindowInsets(includeIme = false)
         BoxWithConstraints(
-            Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f))
+            Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction))
                 .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
+                .clickable(enabled = LocalDDialogActive.current, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
                 .testTag("updateNotesBackdrop"),
             contentAlignment = Alignment.BottomCenter,
         ) {
             val inset = if (maxWidth <= 370.dp) 20.dp else 22.dp
             Column(
                 Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp).widthIn(max = 398.dp).fillMaxWidth()
-                    .heightIn(max = maxHeight - 16.dp).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
+                    .heightIn(max = maxHeight - 16.dp).then(modifier).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
                     .background(DColors.Panel).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom))
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
                     .padding(inset).semantics { paneTitle = title },

@@ -6,16 +6,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -26,24 +35,37 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import dev.local.artistgallery.model.CoverRef
 import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.model.MediaType
 import dev.local.artistgallery.model.SampleCoverKey
+import androidx.compose.ui.platform.testTag
+
+@Composable
+internal fun Modifier.pressMotion(source: MutableInteractionSource, enabled: Boolean): Modifier {
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (enabled && pressed) .96f else 1f, tween(160), label = "buttonPress")
+    return drawWithContent { scale(scale) { this@drawWithContent.drawContent() } }
+}
 
 @Composable
 fun DIconButton(icon: DIcon, label: String, enabled: Boolean = true, tint: Color = DColors.Ink, onClick: () -> Unit) {
-    Box(Modifier.size(48.dp).clip(RoundedCornerShape(20.dp)).clickable(enabled = enabled, role = Role.Button, onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+    val active = enabled && LocalDDialogActive.current
+    val interaction = remember { MutableInteractionSource() }
+    Box(Modifier.size(48.dp).pressMotion(interaction, active).clip(RoundedCornerShape(20.dp)).clickable(interactionSource = interaction, indication = LocalIndication.current, enabled = active, role = Role.Button, onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         DIconImage(icon, tint.copy(alpha = if (enabled) 1f else .4f))
     }
 }
 
 @Composable
 fun DButton(label: String, modifier: Modifier = Modifier, primary: Boolean = false, soft: Boolean = false, enabled: Boolean = true, icon: DIcon? = null, textAction: Boolean = false, onClick: () -> Unit) {
+    val active = enabled && LocalDDialogActive.current
+    val interaction = remember { MutableInteractionSource() }
     val color = if (primary) Color.White else if (soft || textAction) DColors.Action else DColors.Ink
-    Row(modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(20.dp)).background(if (primary) DColors.Action else if (soft) DColors.Soft else Color.Transparent)
-        .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp),
+    Row(modifier.heightIn(min = 48.dp).pressMotion(interaction, active).clip(RoundedCornerShape(20.dp)).background(if (primary) DColors.Action else if (soft) DColors.Soft else Color.Transparent)
+        .clickable(interactionSource = interaction, indication = LocalIndication.current, enabled = active, role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) { DIconImage(icon, color.copy(alpha = if (enabled) 1f else .4f), 20.dp); Spacer(Modifier.width(6.dp)) }
         Text(label, color = color.copy(alpha = if (enabled) 1f else .4f), fontSize = 15.sp, textAlign = TextAlign.Center)
@@ -108,12 +130,14 @@ fun DCover(cover: CoverRef, fallback: DIcon, fixtureCover: (@Composable (SampleC
 @Composable
 fun DRow(title: String, subtitle: String? = null, icon: DIcon = DIcon.Album, compact: Boolean = false, cover: CoverRef? = null,
          fixtureCover: (@Composable (SampleCoverKey) -> Unit)? = null, previewDecoder: PreviewDecoder? = null,
-         onLongClick: (() -> Unit)? = null, trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+         onLongClick: (() -> Unit)? = null, trailing: (@Composable () -> Unit)? = null, iconBadge: Boolean = false, onClick: () -> Unit) {
+    val active = LocalDDialogActive.current
+    val interaction = remember { MutableInteractionSource() }
     Row(Modifier.fillMaxWidth().heightIn(min = if (compact) 66.dp else 76.dp)
-        .then(if (onLongClick == null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier.combinedClickable(role = Role.Button, onLongClick = onLongClick, onClick = onClick))
+        .then(if (onLongClick == null) Modifier.clickable(interactionSource = interaction, indication = LocalIndication.current, enabled = active, role = Role.Button, onClick = onClick) else Modifier.combinedClickable(interactionSource = interaction, indication = LocalIndication.current, enabled = active, role = Role.Button, onLongClick = onLongClick, onClick = onClick))
         .padding(horizontal = if (compact) 4.dp else 18.dp, vertical = if (compact) 15.dp else 18.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (cover == null) DIconImage(icon) else DCover(cover, icon, fixtureCover, previewDecoder)
+        if (cover == null) { if (iconBadge) DIconBadge(icon, Modifier.pressMotion(interaction, active)) else DIconImage(icon) } else DCover(cover, icon, fixtureCover, previewDecoder)
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = 17.sp, lineHeight = 25.5.sp, fontWeight = FontWeight.Medium)
             if (subtitle != null) Text(subtitle, color = DColors.Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
@@ -145,16 +169,29 @@ fun dLoadState(state: LoadState, retry: () -> Unit): Boolean {
 
 @Composable
 fun DBottomNavigation(manage: Boolean, onEvent: (GalleryEvent) -> Unit) {
-    Row(Modifier.fillMaxWidth().height(70.dp).clip(RoundedCornerShape(36.dp)).background(Color.White).border(1.dp, DColors.Line, RoundedCornerShape(36.dp)).padding(7.dp)) {
+    val fraction by animateFloatAsState(if (manage) 1f else 0f, tween(280), label = "navigationPill")
+    BoxWithConstraints(Modifier.fillMaxWidth().height(70.dp).clip(RoundedCornerShape(36.dp)).background(Color.White).border(1.dp, DColors.Line, RoundedCornerShape(36.dp)).padding(7.dp)) {
+        Box(Modifier.offset { IntOffset((maxWidth / 2 * fraction).roundToPx(), 0) }.width(maxWidth / 2).fillMaxHeight()
+            .background(DColors.Soft, RoundedCornerShape(28.dp)).testTag("bottomNavigationPill").semantics { motionFraction = fraction })
+        Row(Modifier.fillMaxSize()) {
         listOf(false, true).forEach { isManage ->
             val selected = isManage == manage
-            Row(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(28.dp)).background(if (selected) DColors.Soft else Color.Transparent)
-                .semantics { this.selected = selected }.clickable(role = Role.Tab) { onEvent(if (isManage) GalleryEvent.OpenManage else GalleryEvent.OpenHome) },
+            val interaction = remember { MutableInteractionSource() }
+            Row(Modifier.weight(1f).fillMaxHeight().pressMotion(interaction, true).clip(RoundedCornerShape(28.dp))
+                .semantics { this.selected = selected }.clickable(interactionSource = interaction, indication = LocalIndication.current, role = Role.Tab) { onEvent(if (isManage) GalleryEvent.OpenManage else GalleryEvent.OpenHome) },
                 horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 DIconImage(if (isManage) DIcon.Manage else DIcon.Artist, if (selected) DColors.Action else DColors.Muted)
                 Spacer(Modifier.width(9.dp))
                 Text(if (isManage) "管理" else "画师", color = if (selected) DColors.Action else DColors.Muted, fontSize = 14.sp, lineHeight = 21.sp)
             }
         }
+        }
+    }
+}
+
+@Composable
+internal fun DIconBadge(icon: DIcon, modifier: Modifier = Modifier) {
+    Box(modifier.size(36.dp).background(DColors.Soft, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+        DIconImage(icon, DColors.Action, 21.dp)
     }
 }

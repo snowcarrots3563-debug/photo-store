@@ -23,8 +23,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.local.artistgallery.data.archive.*
 import dev.local.artistgallery.model.ArtistSummary
 import dev.local.artistgallery.ui.*
@@ -42,28 +40,31 @@ fun ArchiveImportDialog(
     resume: (String) -> Unit = coordinator::resume,
     backToMenu: () -> Unit,
 ) {
-    if (!state.visible) return
-    val isFolder = state.format == "FOLDER"
-    val title = when (state.step) {
-        ArchiveStep.Source, ArchiveStep.Target -> if (isFolder) "从文件夹导入" else "从压缩包导入"
-        ArchiveStep.Preparing -> if (isFolder) "正在准备文件夹" else "正在准备压缩包"
-        ArchiveStep.Password -> "输入压缩包密码"
-        ArchiveStep.Preview -> "确认导入"
-        ArchiveStep.Importing -> if (isFolder) "正在导入文件夹" else "正在解压导入"
-        ArchiveStep.Result -> "导入结果"
-        ArchiveStep.Error -> if (isFolder) "文件夹无法导入" else if (state.reason == ArchiveError.MISSING_VOLUME) "补齐缺少的分卷" else "压缩包无法导入"
-        ArchiveStep.History -> "压缩包／文件夹导入记录"
-    }
     var password by remember(state.step, state.taskId, state.message) { mutableStateOf("") }
     DisposableEffect(state.step) { onDispose { password = "" } }
-    Dialog(onDismissRequest = coordinator::hide, properties = DialogProperties(decorFitsSystemWindows = false)) {
+    LaunchedEffect(state.visible) { if (!state.visible) password = "" }
+    DAnimatedDialog(Triple(state, artists, coordinator.hasSelection).takeIf { state.visible }, coordinator::hide) { model, panel, fraction ->
+        val state = model.first
+        val artists = model.second
+        val active = LocalDDialogActive.current
+        val isFolder = state.format == "FOLDER"
+        val title = when (state.step) {
+            ArchiveStep.Source, ArchiveStep.Target -> if (isFolder) "从文件夹导入" else "从压缩包导入"
+            ArchiveStep.Preparing -> if (isFolder) "正在准备文件夹" else "正在准备压缩包"
+            ArchiveStep.Password -> "输入压缩包密码"
+            ArchiveStep.Preview -> "确认导入"
+            ArchiveStep.Importing -> if (isFolder) "正在导入文件夹" else "正在解压导入"
+            ArchiveStep.Result -> "导入结果"
+            ArchiveStep.Error -> if (isFolder) "文件夹无法导入" else if (state.reason == ArchiveError.MISSING_VOLUME) "补齐缺少的分卷" else "压缩包无法导入"
+            ArchiveStep.History -> "压缩包／文件夹导入记录"
+        }
         val keyboard = LocalSoftwareKeyboardController.current
         LaunchedEffect(state.step) { if (state.step != ArchiveStep.Password) keyboard?.hide() }
         val dialogInsets = galleryDialogWindowInsets(includeIme = state.step == ArchiveStep.Password)
-        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f)).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { coordinator.hide() }, contentAlignment = Alignment.BottomCenter) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction)).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { coordinator.hide() }, contentAlignment = Alignment.BottomCenter) {
             Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp).widthIn(max = 398.dp).fillMaxWidth().wrapContentHeight().heightIn(max = maxHeight - 16.dp)
-                .clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
+                .then(panel).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
                 .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
                 .padding(if (maxWidth <= 370.dp) 20.dp else 22.dp).semantics { paneTitle = title }) {
@@ -86,7 +87,7 @@ fun ArchiveImportDialog(
                     Hint("按目录新建作品集；同名另建带序号作品集。PDF 每页转为 PNG 并保留整页排版，TXT 列入跳过清单，视频原件保留。")
                         if (artists.isEmpty()) Hint("还没有画师，请先添加画师。")
                         DButton("添加画师", Modifier.fillMaxWidth().padding(top = 10.dp), soft = true, onClick = addArtist)
-                        Buttons("取消", coordinator::done, if (coordinator.hasSelection) "继续预览" else if (isFolder) "选择文件夹" else "选择文件", { if (coordinator.hasSelection) coordinator.previewSelection() else pick(false) }, artist != null)
+                        Buttons("取消", coordinator::done, if (model.third) "继续预览" else if (isFolder) "选择文件夹" else "选择文件", { if (coordinator.hasSelection) coordinator.previewSelection() else pick(false) }, artist != null)
                     }
                     ArchiveStep.Preparing, ArchiveStep.Importing -> {
                         Hint(state.progress)
@@ -96,7 +97,7 @@ fun ArchiveImportDialog(
                     ArchiveStep.Password -> {
                         Hint("密码仅用于当前任务，不保存。加密目录解锁后才展示预览。")
                         Text("密码", fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
-                        BasicTextField(password, { password = it }, singleLine = true,
+                        BasicTextField(password, { password = it }, singleLine = true, enabled = active,
                             textStyle = TextStyle(fontSize = 15.sp, color = DColors.Ink), cursorBrush = SolidColor(DColors.Action),
                             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             modifier = Modifier.fillMaxWidth().background(DColors.Background, RoundedCornerShape(20.dp)).padding(16.dp).semantics { contentDescription = "压缩包密码" })
@@ -161,10 +162,8 @@ fun ArchiveImportDialog(
                 }
             }
         }
-    }
-    if (state.step == ArchiveStep.Target) {
         ImportTargetOptionDialog("选择画师", artists.map { it.id to it.name }, state.artistId,
-            onDismissRequest = coordinator::back) { id ->
+            onDismissRequest = coordinator::back, visible = state.step == ArchiveStep.Target) { id ->
             coordinator.selectArtist(id)
             coordinator.back()
         }

@@ -11,10 +11,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -26,6 +28,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.MediaSort
 import kotlin.math.roundToInt
@@ -35,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -65,23 +69,37 @@ import kotlinx.coroutines.launch
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Composable (SampleCoverKey) -> Unit)?, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit) {
-    val detail = state.artistDetail
+    ArtistDetailScreen(state, padding, fixtureCover, previewDecoder, state.artistTab, onEvent)
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Composable (SampleCoverKey) -> Unit)?, previewDecoder: PreviewDecoder?, tabTransitionFrom: ArtistTab, onEvent: (GalleryEvent) -> Unit) {
+    val artistId = (state.route as? GalleryRoute.Artist)?.id ?: state.artistDetail?.artist?.id.orEmpty()
+    val detail = state.artistDetail?.takeIf { it.artist.id == artistId }
+    val artist = detail?.artist ?: state.artists.firstOrNull { it.id == artistId }
     val prepared = state.preparedMedia
     val loadState = if (state.loadState != LoadState.Ready) state.loadState else state.mediaLoadState
-    // An empty loading list would clamp a restored item index to zero.
-    if (loadState != LoadState.Ready || detail == null || prepared == null) {
-        Column(Modifier.fillMaxSize().padding(horizontal = padding, vertical = 20.dp)) {
-            DDetailHeader(detail?.artist?.name.orEmpty(), { onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistMenu)) }, { onEvent(GalleryEvent.NavigateBack) })
-            dLoadState(loadState) { onEvent(GalleryEvent.RetryLoad) }
+    val dataReady = loadState == LoadState.Ready && detail != null && prepared != null
+    val imageLayout = prepared?.layout ?: state.browseOptions.imageLayout
+    val imageSort = prepared?.sort ?: state.browseOptions.artistImageSorts[artistId] ?: MediaSort.Default
+    val tabPill = remember(artistId) { Animatable(if (tabTransitionFrom == ArtistTab.Images) 0f else 1f) }
+    LaunchedEffect(state.artistTab) { tabPill.animateTo(if (state.artistTab == ArtistTab.Images) 0f else 1f, tween(280)) }
+    var layoutAnchor by remember(artistId, state.artistTab) { mutableStateOf<Pair<ArtistImageLayout, String>?>(null) }
+    val anchoredPosition = remember(prepared, layoutAnchor) {
+        val anchor = layoutAnchor
+        if (prepared == null || anchor == null || prepared.layout != anchor.first) null else {
+            val index = if (prepared.layout == ArtistImageLayout.List) prepared.items.indexOfFirst { it.id == anchor.second }
+                else prepared.gridRows.indexOfFirst { row -> row.tiles.any { it.media.id == anchor.second } }
+            index.takeIf { it >= 0 }?.let { GalleryScrollPosition(it) }
         }
-        return
     }
-    val imageSort = prepared.sort
-    val scrollKey = "artist:${detail.artist.id}:${state.artistTab}:${prepared.layout.name}" +
+    val scrollKey = "artist:$artistId:${state.artistTab}:${imageLayout.name}" +
         if (state.artistTab == ArtistTab.Images) ":${imageSort.name}" else ""
     key(scrollKey) {
-        val position = state.scrollPositions[scrollKey] ?: GalleryScrollPosition()
+        val position = anchoredPosition ?: state.scrollPositions[scrollKey] ?: GalleryScrollPosition()
         val listState = rememberLazyListState(position.index, position.offset)
+        var realListWasBound by remember { mutableStateOf(false) }
         var collapsedTabs by rememberSaveable(scrollKey) {
             mutableFloatStateOf(if (position.index > 0 || position.offset > 0) Float.MAX_VALUE else 0f)
         }
@@ -117,17 +135,20 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
             }
         }
         val currentOnEvent by rememberUpdatedState(onEvent)
-        val rememberPosition = { currentOnEvent(GalleryEvent.RememberScrollPosition(scrollKey, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)) }
+        val canRememberPosition by rememberUpdatedState(realListWasBound)
+        val rememberPosition = {
+            if (canRememberPosition) currentOnEvent(GalleryEvent.RememberScrollPosition(scrollKey, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset))
+        }
         DisposableEffect(listState, scrollKey) { onDispose { rememberPosition() } }
-        val artist = detail.artist
-        val mediaLabel = if (artist.videoCount > 0) "全部媒体" else "全部图片"
+        val mediaLabel = if ((artist?.videoCount ?: 0) > 0) "全部媒体" else "全部图片"
         val selectingCollections = state.entitySelectionKind == EntitySelectionKind.Collections
-        val collectionIds = remember(detail.collections) { detail.collections.map { it.id } }
+        val collections = detail?.collections.orEmpty()
+        val collectionIds = remember(collections) { collections.map { it.id } }
         val reorder = rememberReorderRows(collectionIds, state.artistTab == ArtistTab.Collections && selectingCollections && !state.isSaving, listState)
-        val collectionsById = remember(detail.collections) { detail.collections.associateBy { it.id } }
-        val commitOrder = { ids: List<String> -> onEvent(GalleryEvent.ReorderCollections(artist.id, ids)) }
-        val columns = prepared.layout.columns
-        val gridRows = prepared.gridRows
+        val collectionsById = remember(collections) { collections.associateBy { it.id } }
+        val commitOrder = { ids: List<String> -> onEvent(GalleryEvent.ReorderCollections(artistId, ids)) }
+        val columns = imageLayout.columns
+        val gridRows = prepared?.gridRows.orEmpty()
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxWidth().padding(start = padding, end = padding, top = 20.dp)) {
                 Column(Modifier.fillMaxWidth().testTag("artistHeader")) {
@@ -139,9 +160,12 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                         DDetailHeader("已选择 ${state.selectedEntityIds.size} 项", {}, { onEvent(GalleryEvent.ExitEntitySelection) }, onDoubleTap = scrollToTop, trailing = {
                             DIconButton(DIcon.Trash, "删除所选作品集", state.selectedEntityIds.isNotEmpty() && !state.isSaving, tint = DColors.Error) { onEvent(GalleryEvent.OpenDeleteSelectedEntities) }
                         })
-                    } else DDetailHeader(artist.name, { onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistMenu)) }, { rememberPosition(); onEvent(GalleryEvent.NavigateBack) }, onDoubleTap = scrollToTop)
+                    } else DDetailHeader(artist?.name ?: "\u00A0", { onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistMenu)) }, { rememberPosition(); onEvent(GalleryEvent.NavigateBack) }, onDoubleTap = scrollToTop)
                 }
-                Text("${artist.collectionCount} 个作品集 · ${artist.imageCount} 张图片" + if (artist.videoCount > 0) " · ${artist.videoCount} 个视频" else "", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.padding(vertical = 16.dp).testTag("artistSummary"))
+                Box(Modifier.padding(vertical = 16.dp).testTag("artistSummary")) {
+                    Text(artist?.let { "${it.collectionCount} 个作品集 · ${it.imageCount} 张图片" + if (it.videoCount > 0) " · ${it.videoCount} 个视频" else "" } ?: "\u00A0", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted)
+                    if (artist == null) Box(Modifier.align(Alignment.CenterStart).width(176.dp).height(13.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFFE8EAEE)))
+                }
                 Box(Modifier.fillMaxWidth().testTag("artistTabs").clipToBounds().layout { measurable, constraints ->
                     val placeable = measurable.measure(constraints)
                     tabsHeight = placeable.height.toFloat()
@@ -149,83 +173,153 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                     val hiddenHeight = collapsedTabs.roundToInt()
                     layout(placeable.width, placeable.height - hiddenHeight) { placeable.placeRelative(0, -hiddenHeight) }
                 }) {
-                    Row(Modifier.padding(top = 8.dp, bottom = 24.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color(0xFFE9EBEF)).padding(horizontal = 4.dp, vertical = 2.dp)) {
+                    BoxWithConstraints(Modifier.padding(top = 8.dp, bottom = 24.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color(0xFFE9EBEF)).padding(horizontal = 4.dp, vertical = 2.dp)) {
+                        Box(Modifier.matchParentSize()) {
+                            Box(Modifier.fillMaxWidth(.5f).fillMaxHeight().graphicsLayer { translationX = size.width * tabPill.value }
+                                .padding(vertical = 2.dp).clip(RoundedCornerShape(20.dp)).background(Color.White))
+                        }
+                        Row(Modifier.fillMaxWidth()) {
                         ArtistTab.entries.forEach { tab ->
                             val selected = state.artistTab == tab
                             Box(Modifier.weight(1f).heightIn(min = 48.dp)
                                 .semantics { this.selected = selected }.clickable(enabled = !state.mediaSelectionMode && !selectingCollections && !state.isSaving, role = Role.Tab) { rememberPosition(); onEvent(GalleryEvent.SwitchArtistTab(tab)) }, contentAlignment = Alignment.Center) {
-                                Box(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(RoundedCornerShape(20.dp)).background(if (selected) Color.White else Color.Transparent).padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                                Box(Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                                     Text(if (tab == ArtistTab.Images) mediaLabel else "作品集", fontSize = 15.sp, color = if (selected) DColors.Action else DColors.Ink)
                                 }
                             }
+                        }
                         }
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(bottom = 12.dp).testTag("artistSection"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     if (state.artistTab == ArtistTab.Images) {
-                        Text("$mediaLabel · ${artist.imageCount + artist.videoCount}", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.weight(1f))
+                        Text(artist?.let { "$mediaLabel · ${it.imageCount + it.videoCount}" } ?: mediaLabel, fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.weight(1f))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            DIconButton(DIcon.SortArrows, if (artist.videoCount > 0) "媒体排序" else "图片排序", !state.isSaving && !state.mediaSelectionMode,
+                            DIconButton(DIcon.SortArrows, if ((artist?.videoCount ?: 0) > 0) "媒体排序" else "图片排序", !state.isSaving && !state.mediaSelectionMode,
                                 tint = if (imageSort == MediaSort.Default) DColors.Ink else DColors.Action) {
                                 rememberPosition(); onEvent(GalleryEvent.OpenDialog(GalleryDialog.ArtistImageSort))
                             }
-                            DButton("切换视图", soft = true, enabled = !state.isSaving && !state.mediaSelectionMode) { rememberPosition(); onEvent(GalleryEvent.CycleImageLayout) }
+                            DButton("切换视图", soft = true, enabled = !state.isSaving && !state.mediaSelectionMode) {
+                                val first = listState.firstVisibleItemIndex
+                                val media = if (imageLayout == ArtistImageLayout.List) prepared?.items?.getOrNull(first)
+                                    else prepared?.gridRows?.getOrNull(first)?.tiles?.firstOrNull()?.media
+                                val next = when (state.browseOptions.imageLayout) {
+                                    ArtistImageLayout.List -> ArtistImageLayout.Large
+                                    ArtistImageLayout.Large -> ArtistImageLayout.Medium
+                                    ArtistImageLayout.Medium -> ArtistImageLayout.List
+                                }
+                                layoutAnchor = media?.let { next to it.id }
+                                rememberPosition(); onEvent(GalleryEvent.CycleImageLayout)
+                            }
                         }
                     } else {
-                        Text("${artist.collectionCount} 个作品集", color = DColors.Muted, fontSize = 13.sp, lineHeight = 20.sp)
-                        DButton("新建作品集", textAction = true, enabled = !selectingCollections && !state.isSaving) { onEvent(GalleryEvent.OpenDialog(GalleryDialog.CreateCollection(artist.id))) }
+                        Text(artist?.let { "${it.collectionCount} 个作品集" } ?: "作品集", color = DColors.Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                        DButton("新建作品集", textAction = true, enabled = !selectingCollections && !state.isSaving) { onEvent(GalleryEvent.OpenDialog(GalleryDialog.CreateCollection(artistId))) }
                     }
                 }
             }
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                 val tileSize = ((maxWidth - padding * 2 - 3.dp * (columns - 1)) / columns).coerceAtLeast(1.dp)
-                val viewportRows = ceil(maxHeight.value / tileSize.value).toInt() + 2
-                val needsGridPreviews = state.artistTab == ArtistTab.Images && prepared.layout != ArtistImageLayout.List &&
-                    previewDecoder != null && gridRows.isNotEmpty()
-                var initialGridReady by remember(previewDecoder) { mutableStateOf(false) }
-                LaunchedEffect(gridRows, previewDecoder, viewportRows, needsGridPreviews) {
+                val listLayout = imageLayout == ArtistImageLayout.List
+                val viewportRows = ceil(maxHeight.value / (if (listLayout) 92f else tileSize.value)).toInt() + 2
+                val density = LocalDensity.current
+                val thumbnailPx = with(density) { 68.dp.roundToPx() }
+                // Row weights distribute leftover physical pixels from the first column.
+                val availablePx = with(density) { constraints.maxWidth - padding.roundToPx() * 2 - 3.dp.roundToPx() * (columns - 1) }
+                val roundedCellPx = (availablePx.toFloat() / columns).roundToInt()
+                val remainder = availablePx - roundedCellPx * columns
+                val cellWidths = List(columns) { column ->
+                    (roundedCellPx + if (column < kotlin.math.abs(remainder)) remainder.compareTo(0) else 0).coerceAtLeast(1)
+                }
+                val rowCount = if (listLayout) state.mediaItems.size else gridRows.size
+                val needsPreviews = dataReady && state.artistTab == ArtistTab.Images && previewDecoder != null && rowCount > 0
+                fun rowMedia(index: Int) = if (listLayout) listOf(state.mediaItems[index]) else gridRows[index].tiles.map { it.media }
+                fun cached(media: MediaAssetSummary, column: Int): Boolean {
+                    val pixels = if (listLayout) thumbnailPx else cellWidths[column]
+                    return previewDecoder?.cachedThumbnail(media.storageKey, pixels, pixels, media.type) != null ||
+                        (media.type != MediaType.VIDEO && previewDecoder?.cachedGaussianPreview(media.storageKey, media.type) != null)
+                }
+                fun windowStart(index: Int) = index.coerceIn(0, (rowCount - 1).coerceAtLeast(0))
+                    .coerceAtMost((rowCount - viewportRows).coerceAtLeast(0))
+                var initialPreviewsReady by remember(prepared, previewDecoder, cellWidths, needsPreviews) {
+                    val start = windowStart(listState.firstVisibleItemIndex)
+                    mutableStateOf(!needsPreviews || (start until (start + viewportRows).coerceAtMost(rowCount)).all { index ->
+                        rowMedia(index).withIndex().all { (column, media) -> cached(media, column) }
+                    })
+                }
+                LaunchedEffect(prepared, previewDecoder, cellWidths, viewportRows, needsPreviews) {
                     val decoder = previewDecoder ?: return@LaunchedEffect
-                    if (!needsGridPreviews) return@LaunchedEffect
+                    if (!needsPreviews) return@LaunchedEffect
                     suspend fun prepareRows(start: Int, end: Int) {
                         for (index in start until end) {
-                            for (tile in gridRows[index].tiles) {
-                                if (tile.media.type == MediaType.VIDEO) continue
-                                try { decoder.decodeGaussianPreview(tile.media.storageKey, tile.media.type) }
-                                catch (error: CancellationException) { throw error }
-                                catch (_: Exception) { /* A damaged original keeps its existing failure placeholder. */ }
+                            rowMedia(index).forEachIndexed { column, media ->
+                                if (!cached(media, column)) {
+                                    try {
+                                        if (media.type == MediaType.VIDEO) {
+                                            val pixels = if (listLayout) thumbnailPx else cellWidths[column]
+                                            decoder.decodeThumbnail(media.storageKey, pixels, pixels, media.type)
+                                        } else decoder.decodeGaussianPreview(media.storageKey, media.type)
+                                    } catch (error: CancellationException) { throw error }
+                                    catch (_: Exception) { /* Retain the existing damaged-original placeholder. */ }
+                                }
                             }
                         }
                     }
                     snapshotFlow { listState.firstVisibleItemIndex }.distinctUntilChanged().collectLatest { index ->
-                        // LazyColumn may fill preceding rows when restoring near the end.
-                        val start = index.coerceIn(0, gridRows.lastIndex).coerceAtMost((gridRows.size - viewportRows).coerceAtLeast(0))
-                        val end = (start + viewportRows).coerceAtMost(gridRows.size)
+                        // Restoring near the end can fill earlier rows as well.
+                        val start = windowStart(index)
+                        val end = (start + viewportRows).coerceAtMost(rowCount)
                         prepareRows(start, end)
-                        initialGridReady = true
-                        prepareRows(end, (end + viewportRows).coerceAtMost(gridRows.size))
+                        initialPreviewsReady = true
+                        prepareRows(end, (end + viewportRows).coerceAtMost(rowCount))
                     }
                 }
-                if (needsGridPreviews && !initialGridReady) {
-                    Box(Modifier.fillMaxSize().testTag("artistGridPreviewLoading"), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(28.dp), color = DColors.Action, strokeWidth = 3.dp)
+                val loading = loadState != LoadState.Failed && (!dataReady || !initialPreviewsReady)
+                val layoutReveal = remember { Animatable(if (layoutAnchor?.first == imageLayout) 0f else 1f) }
+                LaunchedEffect(loading) { if (!loading && layoutReveal.value < 1f) layoutReveal.animateTo(1f, tween(280)) }
+                val reveal = remember { Animatable(if (loading) 0f else 1f) }
+                var revealSkeleton by remember { mutableStateOf(loading) }
+                LaunchedEffect(loading, loadState) {
+                    if (loadState == LoadState.Failed) {
+                        revealSkeleton = false
+                        reveal.snapTo(1f)
+                    } else if (loading) {
+                        revealSkeleton = true
+                        reveal.snapTo(0f)
+                    } else if (revealSkeleton) {
+                        reveal.animateTo(1f, tween(350, easing = LinearOutSlowInEasing))
+                        revealSkeleton = false
                     }
-                } else LazyColumn(Modifier.fillMaxSize().onGloballyPositioned { reorder.viewport = it.boundsInRoot() }.nestedScroll(tabScrollConnection).testTag("artistMediaList"), state = listState, contentPadding = PaddingValues(start = padding, end = padding, bottom = 126.dp)) {
+                }
+                val skeletonPhase = if (loadState != LoadState.Failed && (loading || revealSkeleton)) rememberHomeLoadingPhase() else null
+                when {
+                    loadState == LoadState.Failed -> Box(Modifier.fillMaxWidth().padding(horizontal = padding)) {
+                        dLoadState(LoadState.Failed) { onEvent(GalleryEvent.RetryLoad) }
+                    }
+                    loading -> ArtistLoadingSkeleton(imageLayout, state.artistTab, prepared, imageSort, position, padding, requireNotNull(skeletonPhase), detail?.collections, artist?.collectionCount, state.mediaSelectionMode, selectingCollections)
+                    else -> {
+                        SideEffect { realListWasBound = true; if (layoutAnchor?.first == imageLayout) layoutAnchor = null }
+                        LazyColumn(Modifier.fillMaxSize().graphicsLayer { alpha = .88f + .12f * layoutReveal.value }.onGloballyPositioned { reorder.viewport = it.boundsInRoot() }.nestedScroll(tabScrollConnection).testTag("artistMediaList"), state = listState, contentPadding = PaddingValues(start = padding, end = padding, bottom = 126.dp)) {
                 if (state.artistTab == ArtistTab.Images) {
                     if (state.mediaItems.isEmpty()) item {
-                        val defaultName = detail.collections.firstOrNull { it.isDefault }?.name ?: "默认图集"
+                        val defaultName = collections.firstOrNull { it.isDefault }?.name ?: "默认图集"
                         DEmpty("还没有图片", "导入到$defaultName，也可以选择其他作品集。", "导入") { onEvent(GalleryEvent.OpenDialog(GalleryDialog.AddMenu)) }
                     }
-                    else if (prepared.layout == ArtistImageLayout.List) itemsIndexed(state.mediaItems, key = { _, media -> media.id }) { index, media ->
+                    else if (imageLayout == ArtistImageLayout.List) itemsIndexed(state.mediaItems, key = { _, media -> media.id }) { index, media ->
                         if (index > 0) Spacer(Modifier.height(8.dp))
+                        Box {
                         if (state.mediaSelectionMode) {
                             Box(Modifier.testTag("artistSelectedRow:${media.id}")) {
-                                MediaListItem(media, previewDecoder, selected = media.id in state.selectedMediaIds, onSelect = { onEvent(GalleryEvent.ToggleMediaSelection(media.id)) })
+                                MediaListItem(media, previewDecoder, selected = media.id in state.selectedMediaIds, onSelect = { onEvent(GalleryEvent.ToggleMediaSelection(media.id)) }, focusOnLoad = true, revealDetail = !revealSkeleton)
                             }
                         } else if (!state.browseOptions.swipeDelete) {
                             MediaListItem(media, previewDecoder,
                                 onOpen = { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) },
-                                onLongClick = { onEvent(GalleryEvent.StartMediaSelection(media.id)) })
-                        } else SwipeMediaItem(media, previewDecoder, { onEvent(GalleryEvent.OpenDeleteMedia(media.id)) }, { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) }, { onEvent(GalleryEvent.StartMediaSelection(media.id)) })
+                                onLongClick = { onEvent(GalleryEvent.StartMediaSelection(media.id)) }, focusOnLoad = true, revealDetail = !revealSkeleton)
+                        } else SwipeMediaItem(media, previewDecoder, { onEvent(GalleryEvent.OpenDeleteMedia(media.id)) }, { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) }, { onEvent(GalleryEvent.StartMediaSelection(media.id)) }, revealDetail = !revealSkeleton)
+                        if (revealSkeleton && skeletonPhase != null) ArtistLoadingRow(skeletonPhase,
+                            Modifier.matchParentSize().graphicsLayer { alpha = 1f - reveal.value })
+                        }
                     }
                     else itemsIndexed(gridRows, key = { _, row -> row.tiles.first().media.id }) { index, row ->
                         Column {
@@ -234,9 +328,10 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                                     modifier = Modifier.padding(top = if (index == 0) 4.dp else 16.dp, bottom = 10.dp).testTag("artistDateHeader:${row.tiles.first().media.id}"))
                             } else if (index > 0) Spacer(Modifier.height(3.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                row.tiles.forEach { tile ->
+                                row.tiles.forEachIndexed { column, tile ->
                                     val media = tile.media
                                     val selected = media.id in state.selectedMediaIds
+                                    val selectionScale = animateFloatAsState(if (state.mediaSelectionMode && selected) .94f else 1f, tween(160), label = "mediaSelection")
                                     Column(Modifier.weight(1f)) {
                                         Box(Modifier.fillMaxWidth().aspectRatio(1f).testTag("artistTile:${media.id}")
                                             .semantics {
@@ -252,7 +347,10 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                                                     if (state.mediaSelectionMode) onEvent(GalleryEvent.ToggleMediaSelection(media.id))
                                                     else { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) }
                                                 })) {
-                                            MediaThumbnail(media.storageKey, media.type, previewDecoder, Modifier.fillMaxSize(), cornerRadius = 0.dp, focusOnLoad = true)
+                                            MediaThumbnail(media.storageKey, media.type, previewDecoder, Modifier.fillMaxSize().graphicsLayer { scaleX = selectionScale.value; scaleY = selectionScale.value }, cornerRadius = 0.dp, focusOnLoad = true, revealDetail = !revealSkeleton,
+                                                initialSizePx = IntSize(cellWidths[column], cellWidths[column]))
+                                            if (revealSkeleton && skeletonPhase != null) ArtistLoadingTile(skeletonPhase,
+                                                Modifier.matchParentSize().graphicsLayer { alpha = 1f - reveal.value })
                                             if (state.mediaSelectionMode) {
                                                 Box(Modifier.align(Alignment.TopEnd).padding(4.dp).clip(RoundedCornerShape(6.dp)).background(DColors.Panel)) {
                                                     Checkbox(checked = selected, onCheckedChange = null)
@@ -268,8 +366,8 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                             }
                         }
                     }
-                } else if (detail.collections.isEmpty()) item {
-                    DEmpty("还没有作品集", "名称可以稍后再想。", "先创建一个") { onEvent(GalleryEvent.OpenDialog(GalleryDialog.CreateCollection(artist.id))) }
+                } else if (collections.isEmpty()) item {
+                    DEmpty("还没有作品集", "名称可以稍后再想。", "先创建一个") { onEvent(GalleryEvent.OpenDialog(GalleryDialog.CreateCollection(artistId))) }
                 } else itemsIndexed(reorder.order, key = { _, id -> "collection:$id" }) { index, id ->
                     val c = collectionsById[id] ?: return@itemsIndexed
                     val isSelected = c.id in state.selectedEntityIds
@@ -283,6 +381,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                     }, itemKey = "collection:${c.id}") {
                         DGroupRow(index == 0, index == reorder.order.lastIndex) {
                             if (index > 0) DDivider()
+                            Box {
                             DRow(c.name, "${c.imageCount} 张图片" + if (c.videoCount > 0) " · ${c.videoCount} 个视频" else "", cover = c.cover, fixtureCover = fixtureCover, previewDecoder = previewDecoder,
                                 onLongClick = if (c.isDefault || selectingCollections || state.isSaving) null else ({ onEvent(GalleryEvent.StartEntitySelection(EntitySelectionKind.Collections, c.id)) }),
                                 trailing = if (selectingCollections) ({
@@ -297,17 +396,22 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                                     else { rememberPosition(); onEvent(GalleryEvent.OpenCollection(c.id, c.artistId)) }
                                 }
                             }
+                            if (revealSkeleton && skeletonPhase != null) HomeLoadingSkeletonRow(skeletonPhase,
+                                Modifier.matchParentSize().graphicsLayer { alpha = 1f - reveal.value })
+                            }
                         }
                     }
                 }
             }
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SwipeMediaItem(item: MediaAssetSummary, decoder: PreviewDecoder?, onDelete: () -> Unit, onOpen: () -> Unit, onLongClick: () -> Unit) {
+private fun SwipeMediaItem(item: MediaAssetSummary, decoder: PreviewDecoder?, onDelete: () -> Unit, onOpen: () -> Unit, onLongClick: () -> Unit, revealDetail: Boolean = true) {
     val width = with(LocalDensity.current) { 80.dp.toPx() }
     var revealed by rememberSaveable(item.id) { mutableStateOf(false) }
     var offset by remember(item.id, width) { mutableFloatStateOf(if (revealed) -width else 0f) }
@@ -339,7 +443,7 @@ private fun SwipeMediaItem(item: MediaAssetSummary, decoder: PreviewDecoder?, on
             }
         }
         Box(Modifier.offset { IntOffset(offset.roundToInt(), 0) }.testTag("artistSwipeContent:${item.id}")) {
-            MediaListItem(item, decoder, onOpen = { if (offset < 0f) settle(false) else onOpen() }, onLongClick = { settle(false); onLongClick() })
+            MediaListItem(item, decoder, onOpen = { if (offset < 0f) settle(false) else onOpen() }, onLongClick = { settle(false); onLongClick() }, focusOnLoad = true, revealDetail = revealDetail)
         }
     }
 }

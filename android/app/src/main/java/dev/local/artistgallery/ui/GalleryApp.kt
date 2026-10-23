@@ -204,6 +204,12 @@ fun GalleryApp(
         Box(Modifier.fillMaxSize().background(DColors.Background).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
             BoxWithConstraints(Modifier.widthIn(max = 430.dp).fillMaxSize().background(DColors.Background)) {
                 val padding = if (maxWidth <= 370.dp) 18.dp else 20.dp
+                var previousTabRoute by remember { mutableStateOf(state.route) }
+                var previousArtistTab by remember { mutableStateOf(state.artistTab) }
+                val tabTransitionFrom = remember(state.route, state.artistTab) {
+                    if (state.route is GalleryRoute.Artist && previousTabRoute == state.route) previousArtistTab else state.artistTab
+                }
+                SideEffect { previousTabRoute = state.route; previousArtistTab = state.artistTab }
                 val holder = rememberSaveableStateHolder()
                 val routeKey = when (val route = state.route) {
                     GalleryRoute.Home -> "home"
@@ -212,24 +218,28 @@ fun GalleryApp(
                 is GalleryRoute.Collection -> "collection:${route.id}"
                 GalleryRoute.Unassigned -> "unassigned"
                 }
+                DOverlaySurfaceMotion(state.overlay) { baseMotion, overlayMotion ->
                 // Keep the browsing composition and its decoded thumbnails while a viewer is open.
-                Box(Modifier.fillMaxSize().layout { measurable, constraints ->
+                Box(baseMotion.fillMaxSize().layout { measurable, constraints ->
                     val placeable = measurable.measure(constraints)
                     layout(placeable.width, placeable.height) {
                         if (state.overlay == GalleryOverlay.None) placeable.placeRelative(0, 0)
                     }
                 }) {
+                    DRouteMotion(state.route, Modifier.fillMaxSize()) {
                     holder.SaveableStateProvider(routeKey) {
                         when (state.route) {
                             GalleryRoute.Home -> ArtistHomeScreen(state, padding, scrollToArtist, { scrollToArtist = null }, fixtureCover, previewDecoder, vm::onEvent)
                             GalleryRoute.Manage -> ManageScreen(state, padding, vm::onEvent, archiveImporter?.let { it::history },
                                 onExport = localTransfer?.let { it::chooseScope }, onBackup = localTransfer?.let { it::openBackup }, onRestore = localTransfer?.let { it::openRestore })
                             GalleryRoute.Unassigned -> UnassignedMediaScreen(state, padding, previewDecoder, vm::onEvent)
-                            is GalleryRoute.Artist -> ArtistDetailScreen(state, padding, fixtureCover, previewDecoder, vm::onEvent)
+                            is GalleryRoute.Artist -> ArtistDetailScreen(state, padding, fixtureCover, previewDecoder, tabTransitionFrom = tabTransitionFrom, onEvent = vm::onEvent)
                             is GalleryRoute.Collection -> CollectionScreen(state, padding, previewDecoder, vm::onEvent)
                         }
                     }
+                    }
                 }
+                if (state.overlay != GalleryOverlay.None) Box(overlayMotion.fillMaxSize()) {
                 when (val overlay = state.overlay) {
                     GalleryOverlay.None -> Unit
                     is GalleryOverlay.CardViewer -> {
@@ -256,6 +266,8 @@ fun GalleryApp(
                     }
                     is GalleryOverlay.VideoPlayer -> VideoPlayerScreen(state, overlay.assetId, assetReader, vm::onEvent)
                     GalleryOverlay.ComicReader -> ComicReaderScreen(state, previewDecoder, vm::onEvent)
+                }
+                }
                 }
                 if (state.overlay == GalleryOverlay.None) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 32.dp, vertical = 18.dp)) { DBottomNavigation(state.route == GalleryRoute.Manage || state.route == GalleryRoute.Unassigned, vm::onEvent) }
                 toast?.takeIf { state.dialog == GalleryDialog.None }?.let { message ->

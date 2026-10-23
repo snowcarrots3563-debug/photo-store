@@ -40,12 +40,10 @@ class MainActivity : ComponentActivity() {
             GalleryApp(app.repository, mediaRepository = app.mediaRepository, mediaImporter = app.mediaImportCoordinator, previewDecoder = app.previewDecoder, assetReader = app.assetReader, archiveImporter = app.archiveImporter, browsePreferences = app.browsePreferences, localTransfer = app.localTransfer,
                 importNotifications = app.importNotifications, importResultTarget = importResultTarget, mediaImportSession = app.mediaImportSession,
                 onImportResultConsumed = { importResultTarget = null; intent?.data = null })
-            if (showUpdates && !notificationLaunch) {
-                DTheme {
-                    UpdateNotesDialog(recentUpdates) {
-                        app.updateHistory.acknowledge(versionCode)
-                        showUpdates = false
-                    }
+            DTheme {
+                UpdateNotesDialog(recentUpdates, visible = showUpdates && !notificationLaunch) {
+                    app.updateHistory.acknowledge(versionCode)
+                    showUpdates = false
                 }
             }
         }

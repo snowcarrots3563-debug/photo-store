@@ -112,6 +112,18 @@ class ArtistMediaSelectionUiTest {
         isToggleable() and hasAnyAncestor(hasTestTag("artistSelectedRow:$id")), useUnmergedTree = true,
     )
 
+    @Test fun cyclingAllThreeLayoutsKeepsTheFirstVisibleMediaIdentity() {
+        show()
+        compose.onNodeWithTag("artistMediaList").performScrollToIndex(30)
+        compose.onNodeWithText("切换视图").performClick()
+        compose.onNodeWithTag("artistTile:image30").assertIsDisplayed()
+        compose.onNodeWithText("切换视图").performClick()
+        compose.onNodeWithTag("artistTile:image30").assertIsDisplayed()
+        compose.onNodeWithText("切换视图").performClick()
+        compose.onNodeWithText("30.png").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(3, events.count { it == GalleryEvent.CycleImageLayout }) }
+    }
+
     private fun show(layout: ArtistImageLayout = ArtistImageLayout.List, selection: Boolean = false, saving: Boolean = false, swipeDelete: Boolean = true) {
         val initial = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
             route = GalleryRoute.Artist("artist"), artistDetail = detail,
@@ -123,6 +135,14 @@ class ArtistMediaSelectionUiTest {
                 ArtistDetailScreen(current.value, 18.dp, null, null) { event ->
                     events.add(event)
                     when (event) {
+                        GalleryEvent.CycleImageLayout -> {
+                            val layout = when (current.value.browseOptions.imageLayout) {
+                                ArtistImageLayout.List -> ArtistImageLayout.Large
+                                ArtistImageLayout.Large -> ArtistImageLayout.Medium
+                                ArtistImageLayout.Medium -> ArtistImageLayout.List
+                            }
+                            current.value = current.value.copy(browseOptions = current.value.browseOptions.copy(imageLayout = layout)).withPreparedMedia(images)
+                        }
                         is GalleryEvent.StartMediaSelection -> current.value = current.value.copy(mediaSelectionMode = true, selectedMediaIds = setOf(event.assetId))
                         is GalleryEvent.ToggleMediaSelection -> current.value = current.value.copy(selectedMediaIds =
                             if (event.assetId in current.value.selectedMediaIds) current.value.selectedMediaIds - event.assetId else current.value.selectedMediaIds + event.assetId)

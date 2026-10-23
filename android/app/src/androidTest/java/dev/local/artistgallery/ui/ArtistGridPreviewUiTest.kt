@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import dev.local.artistgallery.data.ArtistImageLayout
 import dev.local.artistgallery.data.BrowseOptions
 import dev.local.artistgallery.data.importing.MediaFileStore
@@ -38,6 +39,7 @@ class ArtistGridPreviewUiTest {
     private val keys = mutableListOf<String>()
     private lateinit var current: MutableState<GalleryUiState>
     private lateinit var visible: MutableState<Boolean>
+    private lateinit var viewportHeight: MutableState<Dp>
 
     @After fun cleanup() = runBlocking {
         compose.mainClock.autoAdvance = true
@@ -94,9 +96,24 @@ class ArtistGridPreviewUiTest {
         Unit
     }
 
+    @Test fun growingTheViewportDoesNotDetachAnAlreadyRevealedListAfterCachePressure() = runBlocking {
+        val media = fixtures()
+        show(media, height = 400.dp)
+        waitForGrid("image0")
+        compose.mainClock.advanceTimeBy(800)
+        // Evict derived previews with owned files, as can happen while other media is browsed.
+        (fixtures() + fixtures()).forEach { decoder.decodeGaussianPreview(it.storageKey) }
+        compose.runOnIdle { viewportHeight.value = 600.dp }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag("artistMediaList").assertIsDisplayed()
+        compose.onNodeWithTag("artistDetailLoading").assertDoesNotExist()
+        compose.onNodeWithTag("artistTile:image0").assertIsDisplayed()
+        Unit
+    }
+
     private val scrollKey = "artist:artist:Images:Large:NameAscending"
 
-    private fun show(media: List<MediaAssetSummary>, savedIndex: Int = 0) {
+    private fun show(media: List<MediaAssetSummary>, savedIndex: Int = 0, height: Dp = 640.dp) {
         val initial = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
             route = GalleryRoute.Artist("artist"),
             artistDetail = ArtistDetail(ArtistSummary("artist", "预览样本", 0, media.size), emptyList()),
@@ -108,8 +125,9 @@ class ArtistGridPreviewUiTest {
         compose.activity.setContent {
             current = remember { mutableStateOf(initial) }
             visible = remember { mutableStateOf(true) }
+            viewportHeight = remember { mutableStateOf(height) }
             DTheme {
-                Box(Modifier.size(360.dp, 640.dp)) {
+                Box(Modifier.size(360.dp, viewportHeight.value)) {
                     if (visible.value) ArtistDetailScreen(current.value, 18.dp, null, decoder) { event ->
                         when (event) {
                             is GalleryEvent.RememberScrollPosition -> current.value = current.value.copy(

@@ -41,6 +41,7 @@ class MediaThumbnailFocusUiTest {
     private val staging = mutableSetOf<String>()
     private lateinit var currentKey: MutableState<String>
     private lateinit var visible: MutableState<Boolean>
+    private lateinit var reveal: MutableState<Boolean>
     private var videoFixture: SyntheticVideoFixture? = null
     private val targetPx get() = (128 * compose.activity.resources.displayMetrics.density).roundToInt()
 
@@ -97,6 +98,25 @@ class MediaThumbnailFocusUiTest {
         assertFalse(cached.isRecycled)
     }
 
+    @Test fun decodedDetailStaysBehindTheRealPreviewUntilTheSkeletonHasCleared() = runBlocking {
+        val key = png(pattern = true)
+        decoder.decodeGaussianPreview(key)
+        show(key, allowClarity = false)
+        waitForFinal(key)
+        compose.mainClock.advanceTimeBy(800)
+        val held = capture()
+        compose.runOnIdle { reveal.value = true }
+        compose.mainClock.advanceTimeByFrame()
+        val start = capture()
+        assertEquals(detail(held), detail(start), .03f)
+        compose.mainClock.advanceTimeBy(500)
+        val clear = capture()
+        assertTrue(detail(clear) > detail(held) * 2 + .01f)
+        assertEquals(held.width, clear.width)
+        assertEquals(held.height, clear.height)
+        Unit
+    }
+
     @Test fun defaultThumbnailCallDoesNotRequestGaussianPreview() = runBlocking {
         val key = png(Color.BLUE)
         show(key, focus = false)
@@ -150,15 +170,16 @@ class MediaThumbnailFocusUiTest {
         assertNull(videoDecoder.cachedGaussianPreview(key, MediaType.VIDEO))
     }
 
-    private fun show(key: String, focus: Boolean = true, type: MediaType = MediaType.IMAGE, previewDecoder: PreviewDecoder = decoder) {
+    private fun show(key: String, focus: Boolean = true, type: MediaType = MediaType.IMAGE, previewDecoder: PreviewDecoder = decoder, allowClarity: Boolean = true) {
         compose.mainClock.autoAdvance = false
         currentKey = mutableStateOf(key)
         visible = mutableStateOf(true)
+        reveal = mutableStateOf(allowClarity)
         compose.activityRule.scenario.onActivity { activity -> activity.setContent {
             DTheme {
                 if (visible.value) {
                     val modifier = Modifier.size(128.dp).testTag("thumbnail")
-                    if (focus) MediaThumbnail(currentKey.value, type, previewDecoder, modifier, cornerRadius = 0.dp, focusOnLoad = true)
+                    if (focus) MediaThumbnail(currentKey.value, type, previewDecoder, modifier, cornerRadius = 0.dp, focusOnLoad = true, revealDetail = reveal.value)
                     else MediaThumbnail(currentKey.value, type, previewDecoder, modifier, cornerRadius = 0.dp)
                 }
             }

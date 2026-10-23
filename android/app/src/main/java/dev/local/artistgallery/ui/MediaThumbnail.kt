@@ -43,8 +43,8 @@ import dev.local.artistgallery.model.MediaType
 import kotlinx.coroutines.CancellationException
 
 @Composable
-fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp, focusOnLoad: Boolean = false) {
-    var size by remember { mutableStateOf(IntSize.Zero) }
+fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp, focusOnLoad: Boolean = false, revealDetail: Boolean = true, initialSizePx: IntSize = IntSize.Zero) {
+    var size by remember(initialSizePx) { mutableStateOf(initialSizePx) }
     var image by remember(storageKey, type, previewDecoder, size, focusOnLoad) {
         mutableStateOf<Bitmap?>(if (size.width > 0 && size.height > 0) {
             previewDecoder?.cachedThumbnail(storageKey, size.width, size.height, type)
@@ -65,12 +65,18 @@ fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewD
                     catch (_: Exception) { null }
                 }
                 image = previewDecoder?.decodeThumbnail(storageKey, size.width, size.height, type)
-                if (image != null && preview != null) clarity.animateTo(1f, tween(350))
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
                 image = null
             }
+            if (image == null) preview = null
+        }
+    }
+    // Decode independently: a page skeleton may still cover this cell when detail arrives.
+    LaunchedEffect(image, preview != null, revealDetail) {
+        if (image != null && preview != null && revealDetail) {
+            clarity.animateTo(1f, tween(350))
             preview = null
         }
     }

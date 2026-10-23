@@ -36,7 +36,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
 @Composable
@@ -48,25 +47,38 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
         return
     }
     val dialog = state.dialog
-    if (dialog == GalleryDialog.None) return
+    val allowed = when (dialog) {
+        GalleryDialog.None -> false
+        GalleryDialog.ArtistImageSort -> state.route is GalleryRoute.Artist && state.artistTab == ArtistTab.Images && !state.mediaSelectionMode && state.entitySelectionKind == null && !state.isSaving && state.overlay == GalleryOverlay.None
+        GalleryDialog.CollectionMediaSort -> (state.route as? GalleryRoute.Collection)?.id?.let { state.collection?.id == it } == true && state.loadState == LoadState.Ready && state.mediaLoadState == LoadState.Ready && !state.mediaSelectionMode && state.entitySelectionKind == null && !state.isSaving && state.overlay == GalleryOverlay.None
+        else -> true
+    }
+    var centered by remember { mutableStateOf(false) }
+    if (allowed) centered = dialog == GalleryDialog.ArtistImageSort || dialog == GalleryDialog.CollectionMediaSort
+    DAnimatedDialog(state.takeIf { allowed }, { if (!state.isSaving) onEvent(GalleryEvent.DismissDialog) },
+        DialogProperties(decorFitsSystemWindows = false, dismissOnBackPress = !state.isSaving, dismissOnClickOutside = !state.isSaving), centered) { presentation, panel, fraction ->
+        GalleryDialogContent(presentation, toast, { if (allowed) onEvent(it) }, onArchive, previewDecoder, onFolder, onExport, panel, fraction)
+    }
+}
+
+@Composable
+private fun GalleryDialogContent(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent) -> Unit, onArchive: (() -> Unit)?, previewDecoder: PreviewDecoder?,
+                                 onFolder: (() -> Unit)?, onExport: ((ExportScope) -> Unit)?, modifier: Modifier, fraction: Float) {
+    val dialog = state.dialog
     if (dialog == GalleryDialog.ArtistImageSort) {
         val artistId = (state.route as? GalleryRoute.Artist)?.id ?: return
-        if (state.artistTab != ArtistTab.Images || state.mediaSelectionMode || state.entitySelectionKind != null ||
-            state.isSaving || state.overlay != GalleryOverlay.None) return
-        ImportTargetOptionDialog(if ((state.artistDetail?.artist?.videoCount ?: 0) > 0) "媒体排序" else "图片排序", MediaSort.entries.map { it.name to it.label },
+        ImportTargetOptionContent(if ((state.artistDetail?.artist?.videoCount ?: 0) > 0) "媒体排序" else "图片排序", MediaSort.entries.map { it.name to it.label },
             (state.browseOptions.artistImageSorts[artistId] ?: MediaSort.Default).name,
-            { onEvent(GalleryEvent.DismissDialog) }) { id ->
+            { onEvent(GalleryEvent.DismissDialog) }, modifier, fraction) { id ->
             onEvent(GalleryEvent.SetArtistImageSort(MediaSort.valueOf(id)))
         }
         return
     }
     if (dialog == GalleryDialog.CollectionMediaSort) {
         val collectionId = (state.route as? GalleryRoute.Collection)?.id ?: return
-        if (state.collection?.id != collectionId || state.loadState != LoadState.Ready || state.mediaLoadState != LoadState.Ready ||
-            state.mediaSelectionMode || state.entitySelectionKind != null || state.isSaving || state.overlay != GalleryOverlay.None) return
-        ImportTargetOptionDialog("图集排序", MediaSort.entries.map { it.name to if (it == MediaSort.Default) "默认顺序（文件名称升序）" else it.label },
+        ImportTargetOptionContent("图集排序", MediaSort.entries.map { it.name to if (it == MediaSort.Default) "默认顺序（文件名称升序）" else it.label },
             (state.browseOptions.collectionMediaSorts[collectionId] ?: MediaSort.Default).name,
-            { onEvent(GalleryEvent.DismissDialog) }) { id ->
+            { onEvent(GalleryEvent.DismissDialog) }, modifier, fraction) { id ->
             onEvent(GalleryEvent.SetCollectionMediaSort(MediaSort.valueOf(id)))
         }
         return
@@ -74,7 +86,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
     if (dialog == GalleryDialog.UpdateHistory) {
         val context = LocalContext.current
         val updates = remember(context) { dev.local.artistgallery.data.LocalUpdateHistory(context).all() }
-        UpdateNotesDialog(updates, showAll = true) { onEvent(GalleryEvent.DismissDialog) }
+        UpdateNotesContent(updates, true, { onEvent(GalleryEvent.DismissDialog) }, modifier, fraction)
         return
     }
     fun open(d: GalleryDialog) { onEvent(GalleryEvent.OpenDialog(d)) }
@@ -107,15 +119,15 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
         GalleryDialog.None -> ""
     }
     val isImportRunning = dialog == GalleryDialog.ImportProgress
-    Dialog(onDismissRequest = { onEvent(GalleryEvent.DismissDialog) }, properties = DialogProperties(decorFitsSystemWindows = false, dismissOnBackPress = !state.isSaving, dismissOnClickOutside = !state.isSaving)) {
+    run {
         val hasInput = dialog is GalleryDialog.AddArtist || dialog is GalleryDialog.CreateCollection || dialog is GalleryDialog.RenameCollection || dialog is GalleryDialog.RenameArtist
         val keyboard = LocalSoftwareKeyboardController.current
         LaunchedEffect(hasInput) { if (!hasInput) keyboard?.hide() }
         val dialogInsets = galleryDialogWindowInsets(includeIme = hasInput)
-        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f)).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { if (!isImportRunning) onEvent(GalleryEvent.DismissDialog) }, contentAlignment = Alignment.BottomCenter) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction)).testTag("galleryDialogBackdrop").windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).clickable(enabled = LocalDDialogActive.current, interactionSource = remember { MutableInteractionSource() }, indication = null) { if (!isImportRunning && !state.isSaving) onEvent(GalleryEvent.DismissDialog) }, contentAlignment = Alignment.BottomCenter) {
             val inset = if (maxWidth <= 370.dp) 20.dp else 22.dp
             Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp).widthIn(max = 398.dp).fillMaxWidth().heightIn(max = maxHeight - 16.dp)
-                .clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
+                .then(modifier).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
                 .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
                 .then(if (dialog is GalleryDialog.ArtistCover) Modifier else Modifier.verticalScroll(rememberScrollState())).padding(inset).semantics { paneTitle = title }) {
@@ -295,12 +307,10 @@ private fun ImportTargetContent(state: GalleryUiState, target: GalleryDialog.Imp
     val selectedArtist = state.artists.firstOrNull { it.id == target.artistId }
     var artistMenu by remember { mutableStateOf(false) }
     DButton(selectedArtist?.name ?: "选择画师", soft = true, modifier = Modifier.fillMaxWidth()) { artistMenu = true }
-    if (artistMenu) {
-        ImportTargetOptionDialog("选择画师", state.artists.map { it.id to it.name }, target.artistId,
-            onDismissRequest = { artistMenu = false }) { id ->
+    ImportTargetOptionDialog("选择画师", state.artists.map { it.id to it.name }, target.artistId,
+            onDismissRequest = { artistMenu = false }, visible = artistMenu) { id ->
             artistMenu = false
             onEvent(GalleryEvent.ImportArtistSelected(id))
-        }
     }
     val selectedCollection = state.importTargetCollections.firstOrNull { it.id == target.collectionId }
     if (target.artistId != null) {
@@ -308,12 +318,10 @@ private fun ImportTargetContent(state: GalleryUiState, target: GalleryDialog.Imp
         var collectionMenu by remember { mutableStateOf(false) }
         val options = if (defaultReady) state.importTargetCollections.filterNot { it.isDefault } else state.importTargetCollections
         DButton(selectedCollection?.name ?: if (defaultReady && !target.toUnassigned) defaultName else "选择作品集", soft = true, modifier = Modifier.fillMaxWidth(), enabled = options.isNotEmpty()) { collectionMenu = true }
-        if (collectionMenu) {
-            ImportTargetOptionDialog("选择作品集", options.map { it.id to it.name }, target.collectionId,
-                onDismissRequest = { collectionMenu = false }) { id ->
+        ImportTargetOptionDialog("选择作品集", options.map { it.id to it.name }, target.collectionId,
+                onDismissRequest = { collectionMenu = false }, visible = collectionMenu) { id ->
                 collectionMenu = false
                 onEvent(GalleryEvent.ImportCollectionSelected(id))
-            }
         }
         if (defaultReady && (target.collectionId != null || target.toUnassigned)) {
             DButton("使用$defaultName", modifier = Modifier.fillMaxWidth().padding(top = 8.dp), soft = true) { onEvent(GalleryEvent.ImportCollectionSelected(null)) }
@@ -339,14 +347,23 @@ internal fun ImportTargetOptionDialog(
     options: List<Pair<String, String>>,
     selectedId: String?,
     onDismissRequest: () -> Unit,
+    visible: Boolean = true,
     onSelect: (String) -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismissRequest, properties = DialogProperties(decorFitsSystemWindows = false)) {
+    DAnimatedDialog(Triple(title, options, selectedId).takeIf { visible }, onDismissRequest, centered = true) { model, panel, fraction ->
+        ImportTargetOptionContent(model.first, model.second, model.third, onDismissRequest, panel, fraction, onSelect)
+    }
+}
+
+@Composable
+private fun ImportTargetOptionContent(title: String, options: List<Pair<String, String>>, selectedId: String?, onDismissRequest: () -> Unit,
+                                      modifier: Modifier, fraction: Float, onSelect: (String) -> Unit) {
+        val active = LocalDDialogActive.current
         val dialogInsets = galleryDialogWindowInsets()
-        Box(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f)).windowInsetsPadding(dialogInsets)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismissRequest), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction)).windowInsetsPadding(dialogInsets)
+            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismissRequest), contentAlignment = Alignment.Center) {
             Column(
-                Modifier.width(260.dp).heightIn(max = 360.dp).clip(RoundedCornerShape(28.dp))
+                Modifier.width(260.dp).heightIn(max = 360.dp).then(modifier).clip(RoundedCornerShape(28.dp))
                     .background(DColors.Panel).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
                     .verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
             ) {
@@ -357,7 +374,7 @@ internal fun ImportTargetOptionDialog(
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 52.dp)
                             .semantics { this.selected = selected }
-                            .clickable(role = Role.RadioButton) { onSelect(id) }
+                            .clickable(enabled = active, role = Role.RadioButton) { onSelect(id) }
                             .padding(horizontal = 22.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -368,7 +385,6 @@ internal fun ImportTargetOptionDialog(
                 }
             }
         }
-    }
 }
 
 @Composable
@@ -454,12 +470,13 @@ private fun NameForm(dialog: GalleryDialog, saving: Boolean, error: String?, onE
     Text(label, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
     val focusRequester = remember { FocusRequester() }
     var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(dialog::class) { if (artist) focusRequester.requestFocus() }
+    val active = LocalDDialogActive.current
+    LaunchedEffect(dialog::class, active) { if (artist && active) focusRequester.requestFocus() }
     BasicTextField(draft, { onEvent(GalleryEvent.DraftChanged(it)) },
         Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("nameInput").focusRequester(focusRequester).onFocusChanged { focused = it.isFocused }
             .background(DColors.Background, RoundedCornerShape(20.dp)).border(if (focused) 3.dp else 1.dp, if (focused) DColors.Action else DColors.Line, RoundedCornerShape(20.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp).semantics { contentDescription = label; if (error != null) this.error(error) },
-        enabled = !saving, singleLine = true, textStyle = TextStyle(fontSize = 17.sp, color = DColors.Ink), cursorBrush = SolidColor(DColors.Action),
+        enabled = !saving && active, singleLine = true, textStyle = TextStyle(fontSize = 17.sp, color = DColors.Ink), cursorBrush = SolidColor(DColors.Action),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { onEvent(GalleryEvent.Submit) }),
         decorationBox = { field -> Box(contentAlignment = Alignment.CenterStart) { if (draft.isEmpty()) Text(if (artist) "请输入画师名称" else "暂时还没想好", fontSize = 17.sp, color = DColors.Muted); field() } })
     if (error != null) Text(error, color = DColors.Error, fontSize = 13.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 12.dp).semantics { liveRegion = LiveRegionMode.Polite })

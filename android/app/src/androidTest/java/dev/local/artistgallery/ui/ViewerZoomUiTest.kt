@@ -105,6 +105,41 @@ class ViewerZoomUiTest {
         compose.onNodeWithText("3 / 3").assertIsDisplayed()
     }
 
+    @Test fun heldCardFollowsEachTouchWithoutClockAdvanceAndReleaseStartsAtLastTouch() {
+        showViewer(cardEffects = true)
+        compose.mainClock.autoAdvance = false
+        val page = compose.onNodeWithTag("imagePage:middle")
+        page.performTouchInput {
+            down(center)
+            moveTo(Offset(centerX + width * .12f, centerY), delayMillis = 100)
+        }
+        compose.mainClock.advanceTimeByFrame()
+        val first = page.fetchSemanticsNode().config[ViewerCardDragKey]
+        page.performTouchInput { moveBy(Offset(36f, 18f), delayMillis = 50) }
+        compose.mainClock.advanceTimeByFrame()
+        val held = page.fetchSemanticsNode().config[ViewerCardDragKey]
+        assertEquals(36f, held.x - first.x, 1f)
+        assertEquals(18f, held.y - first.y, 1f)
+        page.performTouchInput { up() }
+        compose.mainClock.advanceTimeByFrame()
+        val released = page.fetchSemanticsNode().config[ViewerCardDragKey]
+        assertEquals(held.x, released.x, 1f)
+        assertEquals(held.y, released.y, 1f)
+        compose.mainClock.advanceTimeBy(32)
+        page.performTouchInput {
+            down(center)
+            moveBy(Offset(-28f, 0f), delayMillis = 50)
+        }
+        compose.mainClock.advanceTimeByFrame()
+        val resumed = page.fetchSemanticsNode().config[ViewerCardDragKey]
+        compose.mainClock.advanceTimeBy(100)
+        assertEquals(resumed, page.fetchSemanticsNode().config[ViewerCardDragKey])
+        compose.runOnIdle { options.value = options.value.copy(cardEffects = false) }
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(Offset.Zero, page.fetchSemanticsNode().config[ViewerCardDragKey])
+        compose.mainClock.autoAdvance = true
+    }
+
     @Test fun gifAssetsUseTheSameZoomAndPageResetLayer() {
         showViewer(initial = "gif")
         pinch("gif", .15f, .4f)

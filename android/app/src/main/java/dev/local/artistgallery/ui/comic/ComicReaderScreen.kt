@@ -17,11 +17,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.MediaType
@@ -37,6 +36,10 @@ import dev.local.artistgallery.ui.DIconImage
 import dev.local.artistgallery.ui.ComicDirection
 import dev.local.artistgallery.ui.GalleryEvent
 import dev.local.artistgallery.ui.GalleryUiState
+import dev.local.artistgallery.ui.GalleryScrollPosition
+import dev.local.artistgallery.ui.DAnimatedDialog
+import dev.local.artistgallery.ui.LocalDDialogActive
+import androidx.compose.foundation.interaction.MutableInteractionSource
 
 @Composable
 fun ComicReaderScreen(state: GalleryUiState, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit) {
@@ -48,7 +51,22 @@ fun ComicReaderScreen(state: GalleryUiState, previewDecoder: PreviewDecoder?, on
         }
         if (state.comicDirection == ComicDirection.NameDescending) ascending.asReversed() else ascending
     }
-    val listState = rememberLazyListState()
+    val collectionId = collection?.id ?: return
+    var previousCollection by remember { mutableStateOf(collectionId) }
+    var previousDirection by remember { mutableStateOf(state.comicDirection) }
+    val directionChanged = remember(collectionId, state.comicDirection) {
+        val changed = previousCollection == collectionId && previousDirection != state.comicDirection
+        previousCollection = collectionId
+        previousDirection = state.comicDirection
+        changed
+    }
+    val scrollKey = "comic:$collectionId:${state.comicDirection.name}"
+    key(scrollKey) {
+    val position = if (directionChanged) GalleryScrollPosition() else state.scrollPositions[scrollKey] ?: GalleryScrollPosition()
+    val listState = rememberLazyListState(position.index, position.offset)
+    val currentOnEvent by rememberUpdatedState(onEvent)
+    val rememberPosition = { currentOnEvent(GalleryEvent.RememberScrollPosition(scrollKey, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)) }
+    DisposableEffect(listState, scrollKey) { onDispose { rememberPosition() } }
     val density = LocalDensity.current
     val widthPx = with(density) { 430.dp.roundToPx() }
     val visibleIds by remember(items) {
@@ -57,26 +75,27 @@ fun ComicReaderScreen(state: GalleryUiState, previewDecoder: PreviewDecoder?, on
         }
     }
     var showSort by remember { mutableStateOf(false) }
-    LaunchedEffect(state.comicDirection, state.route) { listState.scrollToItem(0) }
 
     Column(Modifier.fillMaxSize().background(DColors.Background)) {
         Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            DIconButton(DIcon.Back, "退出漫画阅读") { onEvent(GalleryEvent.CloseOverlay) }
+            DIconButton(DIcon.Back, "退出漫画阅读") { rememberPosition(); onEvent(GalleryEvent.CloseOverlay) }
             Text(collection?.name.orEmpty(), Modifier.weight(1f).padding(horizontal = 8.dp), fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             DIconButton(DIcon.Sort, "漫画阅读顺序") { showSort = true }
         }
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 12.dp)) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().testTag("comicList"), contentPadding = PaddingValues(bottom = 12.dp)) {
             items(items, key = { it.id }) { item ->
-                ComicMedia(item, previewDecoder, isVisible = item.id in visibleIds, playGifs = state.browseOptions.playGifs, targetWidthPx = widthPx, modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                ComicMedia(item, previewDecoder, isVisible = item.id in visibleIds, playGifs = state.browseOptions.playGifs, targetWidthPx = widthPx, modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp).testTag("comicPage:${item.id}")) {
+                    rememberPosition()
                     onEvent(GalleryEvent.OpenMedia(item.id))
                 }
             }
         }
     }
-    if (showSort) ComicSortDialog(state.comicDirection, onDismiss = { showSort = false }, onSelect = {
+    ComicSortDialog(state.comicDirection.takeIf { showSort }, onDismiss = { showSort = false }, onSelect = {
         showSort = false
-        if (it != state.comicDirection) onEvent(GalleryEvent.ToggleComicDirection)
+        if (it != state.comicDirection) { rememberPosition(); onEvent(GalleryEvent.ToggleComicDirection) }
     })
+    }
 }
 
 @Composable
@@ -97,14 +116,18 @@ private fun ComicMedia(item: MediaAssetSummary, decoder: PreviewDecoder?, isVisi
 }
 
 @Composable
-private fun ComicSortDialog(direction: ComicDirection, onDismiss: () -> Unit, onSelect: (ComicDirection) -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(decorFitsSystemWindows = false)) {
+private fun ComicSortDialog(direction: ComicDirection?, onDismiss: () -> Unit, onSelect: (ComicDirection) -> Unit) {
+    DAnimatedDialog(direction, onDismissRequest = onDismiss) { presentation, panel, fraction ->
+        val active = LocalDDialogActive.current
         val dialogInsets = galleryDialogWindowInsets()
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f)).windowInsetsPadding(dialogInsets), contentAlignment = Alignment.TopEnd) {
-            Column(Modifier.padding(top = 132.dp, end = 16.dp).width(240.dp).clip(RoundedCornerShape(28.dp)).background(DColors.Panel).padding(vertical = 12.dp)) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f * fraction))
+            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
+            .windowInsetsPadding(dialogInsets), contentAlignment = Alignment.TopEnd) {
+            Column(Modifier.padding(top = 132.dp, end = 16.dp).then(panel).width(240.dp).clip(RoundedCornerShape(28.dp)).background(DColors.Panel)
+                .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { }.padding(vertical = 12.dp)) {
                 Text("漫画阅读顺序", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 4.dp, bottom = 6.dp))
-                ComicSortOption("名称正序", ComicDirection.NameAscending, direction, onSelect)
-                ComicSortOption("名称倒序", ComicDirection.NameDescending, direction, onSelect)
+                ComicSortOption("名称正序", ComicDirection.NameAscending, presentation) { if (active) onSelect(it) }
+                ComicSortOption("名称倒序", ComicDirection.NameDescending, presentation) { if (active) onSelect(it) }
             }
         }
     }
@@ -112,7 +135,7 @@ private fun ComicSortDialog(direction: ComicDirection, onDismiss: () -> Unit, on
 
 @Composable
 private fun ComicSortOption(label: String, option: ComicDirection, selected: ComicDirection, onSelect: (ComicDirection) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { onSelect(option) }.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(enabled = LocalDDialogActive.current) { onSelect(option) }.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f), fontSize = 16.sp, lineHeight = 24.sp, color = if (option == selected) DColors.Action else DColors.Ink)
         if (option == selected) DIconImage(DIcon.Check, DColors.Action, 18.dp)
     }

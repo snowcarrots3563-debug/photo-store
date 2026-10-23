@@ -5,6 +5,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -21,11 +29,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsPropertyKey
@@ -33,8 +44,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.unit.IntSize
 import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.model.MediaAssetSummary
 import dev.local.artistgallery.model.MediaType
@@ -50,8 +60,11 @@ import dev.local.artistgallery.ui.AnimatedDrawableImage
 import dev.local.artistgallery.ui.PreviewImage
 import dev.local.artistgallery.ui.rememberPreviewImage
 import dev.local.artistgallery.ui.DGroup
+import dev.local.artistgallery.ui.DAnimatedDialog
+import dev.local.artistgallery.ui.LocalDDialogActive
 import dev.local.artistgallery.ui.galleryDialogWindowInsets
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlin.math.ceil
 
 val ViewerZoomKey = SemanticsPropertyKey<Float>("ViewerZoom")
@@ -117,13 +130,14 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
             var zoom by remember(pageItem.id, state.browseOptions.cardEffects) { mutableFloatStateOf(1f) }
             var pan by remember(pageItem.id, state.browseOptions.cardEffects) { mutableStateOf(Offset.Zero) }
             var drag by remember(pageItem.id, state.browseOptions.cardEffects) { mutableStateOf(Offset.Zero) }
+            var pointerHeld by remember(pageItem.id, state.browseOptions.cardEffects) { mutableStateOf(false) }
+            var returnJob by remember(pageItem.id, state.browseOptions.cardEffects) { mutableStateOf<Job?>(null) }
             var decodeScale by remember(pageItem.id) { mutableIntStateOf(1) }
             val isCurrent = page == pager.currentPage
-            val animatedDrag by androidx.compose.animation.core.animateOffsetAsState(
-                drag, androidx.compose.animation.core.spring(dampingRatio = .72f, stiffness = 220f), label = "cardSpringBack",
-            )
+            DisposableEffect(pageItem.id, state.browseOptions.cardEffects) { onDispose { returnJob?.cancel() } }
             LaunchedEffect(isCurrent, state.browseOptions.cardEffects) {
                 if (!isCurrent) {
+                    returnJob?.cancel()
                     zoom = 1f
                     pan = Offset.Zero
                     drag = Offset.Zero
@@ -134,12 +148,20 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
             BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("imagePage:${pageItem.id}").semantics {
                 this[ViewerZoomKey] = zoom
                 this[ViewerPanKey] = pan
-                this[ViewerCardDragKey] = animatedDrag
+                this[ViewerCardDragKey] = if (state.browseOptions.cardEffects) drag else Offset.Zero
             }, contentAlignment = Alignment.Center) {
                 val maxWidthPx = with(density) { maxWidth.roundToPx() }
                 val maxHeightPx = with(density) { maxHeight.roundToPx() }
                 val image = rememberPreviewImage(pageItem.storageKey, decoder, maxWidthPx * decodeScale, maxHeightPx * decodeScale,
                     animated = pageItem.type == MediaType.GIF && state.browseOptions.playGifs, isCurrent = isCurrent)
+                var gaussian by remember(pageItem.id, decoder) { mutableStateOf(decoder?.cachedGaussianPreview(pageItem.storageKey, pageItem.type)) }
+                val clarity = remember(pageItem.id, decoder) { Animatable(0f) }
+                LaunchedEffect(image != null) {
+                    if (image != null && gaussian != null) {
+                        clarity.animateTo(1f, tween(350))
+                        gaussian = null
+                    }
+                }
                 val aspect = image?.let { (it.width.toFloat() / it.height.coerceAtLeast(1)).coerceIn(.62f, 1.65f) } ?: .76f
                 val cardWidth = minOf(maxWidth, maxHeight * aspect)
                 val cardWidthPx = with(density) { cardWidth.toPx() }
@@ -154,6 +176,7 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
                     pan = Offset(pan.x.coerceIn(-maxPanX, maxPanX), pan.y.coerceIn(-maxPanY, maxPanY))
                 }
                 val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+                    returnJob?.cancel()
                     zoom = (zoom * zoomChange).coerceIn(1f, 3f)
                     if (zoom > 1f) {
                         drag = Offset.Zero
@@ -169,8 +192,25 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
                     }
                     if (isCurrent) zoomedPageId = if (zoom > 1f) pageItem.id else null
                 }
-                LaunchedEffect(transformState.isTransformInProgress) { if (!transformState.isTransformInProgress) drag = Offset.Zero }
-                Box(Modifier.fillMaxSize().transformable(transformState, canPan = { zoom > 1f || state.browseOptions.cardEffects }, enabled = isCurrent && !pager.isScrollInProgress), contentAlignment = Alignment.Center) {
+                LaunchedEffect(pointerHeld, transformState.isTransformInProgress) {
+                    if (!pointerHeld && !transformState.isTransformInProgress && drag != Offset.Zero) {
+                        returnJob?.cancel()
+                        returnJob = scope.launch {
+                            animate(initialValue = drag, targetValue = Offset.Zero, typeConverter = Offset.VectorConverter,
+                                animationSpec = spring(dampingRatio = .8f, stiffness = 220f)) { value, _ -> drag = value }
+                        }
+                    }
+                }
+                Box(Modifier.fillMaxSize().pointerInput(pageItem.id, state.browseOptions.cardEffects) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        returnJob?.cancel()
+                        pointerHeld = true
+                        try {
+                            while (awaitPointerEvent(PointerEventPass.Initial).changes.any { it.pressed }) { }
+                        } finally { pointerHeld = false }
+                    }
+                }.transformable(transformState, canPan = { zoom > 1f || state.browseOptions.cardEffects }, enabled = isCurrent && !pager.isScrollInProgress), contentAlignment = Alignment.Center) {
                     Box(
                         Modifier.width(cardWidth).aspectRatio(aspect)
                             .graphicsLayer {
@@ -178,8 +218,8 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
                                 scaleY = zoom
                                 translationX = pan.x
                                 translationY = pan.y
-                                rotationY = if (state.browseOptions.cardEffects) (animatedDrag.x / maxWidthPx.coerceAtLeast(1) * -14f).coerceIn(-14f, 14f) else 0f
-                                rotationX = if (state.browseOptions.cardEffects) (animatedDrag.y / maxHeightPx.coerceAtLeast(1) * 14f).coerceIn(-14f, 14f) else 0f
+                                rotationY = if (state.browseOptions.cardEffects) (drag.x / maxWidthPx.coerceAtLeast(1) * -14f).coerceIn(-14f, 14f) else 0f
+                                rotationX = if (state.browseOptions.cardEffects) (drag.y / maxHeightPx.coerceAtLeast(1) * 14f).coerceIn(-14f, 14f) else 0f
                                 cameraDistance = 18f * density.density
                                 shadowElevation = if (state.browseOptions.cardEffects) 8.dp.toPx() else 0f
                             }
@@ -187,16 +227,22 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
                             .border(1.dp, Color(0xFFDCE6F3), RoundedCornerShape(24.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
+                        gaussian?.let { preview -> Image(preview.asImageBitmap(), null,
+                            Modifier.fillMaxSize().padding(8.dp).testTag("viewerPreview:${pageItem.id}")
+                                .graphicsLayer { alpha = ((1f - clarity.value) / .2f).coerceIn(0f, 1f) },
+                            contentScale = ContentScale.Crop, filterQuality = FilterQuality.High) }
+                        Box(Modifier.fillMaxSize().graphicsLayer { alpha = if (gaussian != null) clarity.value else 1f }) {
                         when (image) {
                             is PreviewImage.Animated -> AnimatedDrawableImage(image.drawable, Modifier.fillMaxSize().padding(8.dp), isVisible = isCurrent)
                             is PreviewImage.Still -> Image(image.bitmap.asImageBitmap(), contentDescription = pageItem.name, modifier = Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit)
-                            null -> if (pageItem.type == MediaType.GIF && decoder != null && state.browseOptions.playGifs) {
+                            null -> if (gaussian != null) Unit else if (pageItem.type == MediaType.GIF && decoder != null && state.browseOptions.playGifs) {
                                 Box(Modifier.fillMaxSize().padding(8.dp).background(Color(0xFFEFF1F5)))
                             } else DIconImage(DIcon.Image, Color(0xFF969EAD))
                         }
+                        }
                         if (state.browseOptions.cardEffects) Canvas(Modifier.fillMaxSize()) {
-                            val x = (size.width * (.5f + animatedDrag.x / maxWidthPx.coerceAtLeast(1))).coerceIn(0f, size.width)
-                            val y = (size.height * (.5f + animatedDrag.y / maxHeightPx.coerceAtLeast(1))).coerceIn(0f, size.height)
+                            val x = (size.width * (.5f + drag.x / maxWidthPx.coerceAtLeast(1))).coerceIn(0f, size.width)
+                            val y = (size.height * (.5f + drag.y / maxHeightPx.coerceAtLeast(1))).coerceIn(0f, size.height)
                             drawRect(Brush.linearGradient(listOf(Color.Transparent, DColors.Blue.copy(alpha = .11f), Color.White.copy(alpha = .18f), Color.Transparent), start = androidx.compose.ui.geometry.Offset(x - size.width * .45f, y - size.height * .3f), end = androidx.compose.ui.geometry.Offset(x + size.width * .45f, y + size.height * .3f)))
                         }
                     }
@@ -218,7 +264,7 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
         if (state.browseOptions.cardEffects) Text("按住画作拖动，松手回正", Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), textAlign = TextAlign.Center, color = DColors.Muted, fontSize = 12.sp)
     }
 
-    if (showActions) ViewerActionsDialog(
+    ViewerActionsDialog(visible = showActions,
         onClose = { showActions = false },
         onAdd = { showActions = false; onEvent(GalleryEvent.AddViewerMediaToCollection) },
         onExport = {
@@ -232,18 +278,23 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
         },
         shareEnabled = onShare != null && !pager.isScrollInProgress,
     )
-    if (showOriginal && decoder != null) OriginalImageDialog(item, decoder) { showOriginal = false }
+    if (decoder != null) OriginalImageDialog(item.takeIf { showOriginal }, decoder) { showOriginal = false }
 }
 
 @Composable
-private fun ViewerActionsDialog(onClose: () -> Unit, onAdd: () -> Unit, onExport: () -> Unit, onShare: () -> Unit, shareEnabled: Boolean) {
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(decorFitsSystemWindows = false)) {
+private fun ViewerActionsDialog(visible: Boolean, onClose: () -> Unit, onAdd: () -> Unit, onExport: () -> Unit, onShare: () -> Unit, shareEnabled: Boolean) {
+    DAnimatedDialog(Unit.takeIf { visible }, onDismissRequest = onClose) { _, panel, fraction ->
+        val active = LocalDDialogActive.current
         val dialogInsets = galleryDialogWindowInsets()
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f)).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)), contentAlignment = Alignment.BottomCenter) {
-            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp).clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)).background(DColors.Panel).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom)).padding(horizontal = 20.dp, vertical = 14.dp)) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f * fraction))
+            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
+            .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)), contentAlignment = Alignment.BottomCenter) {
+            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp).then(panel).clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)).background(DColors.Panel)
+                .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+                .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom)).padding(horizontal = 20.dp, vertical = 14.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("图片操作", fontSize = 20.sp, lineHeight = 29.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    DIconButton(DIcon.Close, "关闭") { onClose() }
+                    DIconButton(DIcon.Close, "关闭", enabled = active) { onClose() }
                 }
                 Spacer(Modifier.height(8.dp))
                 ViewerActionRow("加入其他作品集", DIcon.Plus, onAdd)
@@ -256,7 +307,7 @@ private fun ViewerActionsDialog(onClose: () -> Unit, onAdd: () -> Unit, onExport
 
 @Composable
 private fun ViewerActionRow(label: String, icon: DIcon, onClick: () -> Unit, enabled: Boolean = true) {
-    androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).clickable(enabled = enabled, onClick = onClick), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+    androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).clickable(enabled = enabled && LocalDDialogActive.current, onClick = onClick), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         DIconImage(icon, if (enabled) DColors.Ink else DColors.Muted)
         Text(label, Modifier.weight(1f), color = if (enabled) DColors.Ink else DColors.Muted, fontSize = 15.sp)
         DIconImage(DIcon.Next, DColors.Muted, 18.dp)
@@ -264,43 +315,75 @@ private fun ViewerActionRow(label: String, icon: DIcon, onClick: () -> Unit, ena
 }
 
 @Composable
-private fun OriginalImageDialog(item: MediaAssetSummary, decoder: PreviewDecoder, onClose: () -> Unit) {
-    var zoom by remember(item.id) { mutableFloatStateOf(1f) }
-    var pan by remember(item.id) { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
-    var decodeScale by remember(item.id) { mutableIntStateOf(2) }
+private fun OriginalImageDialog(item: MediaAssetSummary?, decoder: PreviewDecoder, onClose: () -> Unit) {
     val density = LocalDensity.current
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(decorFitsSystemWindows = false)) {
+    DAnimatedDialog(item, onDismissRequest = onClose, centered = true) { presentation, panel, fraction ->
+        val active = LocalDDialogActive.current
+        var zoom by remember(presentation.id) { mutableFloatStateOf(1f) }
+        var pan by remember(presentation.id) { mutableStateOf(Offset.Zero) }
+        var frame by remember(presentation.id) { mutableStateOf(IntSize.Zero) }
+        var decodeScale by remember(presentation.id) { mutableIntStateOf(2) }
+        var lastBitmap by remember(presentation.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
         val dialogInsets = galleryDialogWindowInsets()
-        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f)).windowInsetsPadding(dialogInsets).padding(16.dp), contentAlignment = Alignment.Center) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f * fraction))
+            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
+            .windowInsetsPadding(dialogInsets).padding(16.dp), contentAlignment = Alignment.Center) {
             val viewportWidth = with(density) { maxWidth.roundToPx() }
             val viewportHeight = with(density) { (maxHeight - 190.dp).coerceAtLeast(120.dp).roundToPx() }
-            val image = rememberPreviewImage(item.storageKey, decoder, viewportWidth * decodeScale, viewportHeight * decodeScale)
-            val bitmap = (image as? PreviewImage.Still)?.bitmap
-            Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).clip(RoundedCornerShape(28.dp)).background(DColors.Panel).padding(horizontal = 20.dp, vertical = 14.dp)) {
+            // Removing this branch cancels the original request immediately; only pixels remain during exit.
+            val image = if (active) rememberPreviewImage(presentation.storageKey, decoder, viewportWidth * decodeScale, viewportHeight * decodeScale) else null
+            val decoded = (image as? PreviewImage.Still)?.bitmap
+            SideEffect { if (decoded != null) lastBitmap = decoded }
+            val bitmap = decoded ?: lastBitmap
+            LaunchedEffect(bitmap, frame) {
+                pan = boundedOriginalPan(pan, zoom, bitmap?.width ?: 0, bitmap?.height ?: 0, frame)
+            }
+            Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).then(panel).clip(RoundedCornerShape(28.dp)).background(DColors.Panel)
+                .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+                .padding(horizontal = 20.dp, vertical = 14.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("无特效原图", fontSize = 20.sp, lineHeight = 29.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    DIconButton(DIcon.Close, "关闭") { onClose() }
+                    DIconButton(DIcon.Close, "关闭", enabled = active) { onClose() }
                 }
-                Box(Modifier.weight(1f, fill = false).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color(0xFFEFF1F5)).clipToBounds(), contentAlignment = Alignment.Center) {
+                Box(Modifier.weight(1f, fill = false).fillMaxWidth().testTag("originalImageFrame")
+                    .onSizeChanged {
+                        frame = it
+                        pan = boundedOriginalPan(pan, zoom, bitmap?.width ?: 0, bitmap?.height ?: 0, it)
+                    }.semantics { this[ViewerZoomKey] = zoom; this[ViewerPanKey] = pan }
+                    .clip(RoundedCornerShape(22.dp)).background(Color(0xFFEFF1F5)).clipToBounds(), contentAlignment = Alignment.Center) {
                     if (bitmap != null) Image(
-                        bitmap.asImageBitmap(), contentDescription = item.name, modifier = Modifier.fillMaxSize()
+                        bitmap.asImageBitmap(), contentDescription = presentation.name, modifier = Modifier.fillMaxSize().testTag("originalImagePixels")
                             .graphicsLayer(scaleX = zoom, scaleY = zoom, translationX = pan.x, translationY = pan.y)
-                            .pointerInput(item.id) {
-                                detectTransformGestures { _, panChange, zoomChange, _ ->
+                            .pointerInput(presentation.id, active, bitmap.width, bitmap.height, frame) {
+                                if (active) detectTransformGestures { _, panChange, zoomChange, _ ->
                                     zoom = (zoom * zoomChange).coerceIn(1f, 3f)
                                     decodeScale = maxOf(decodeScale, ceil(zoom).toInt())
-                                    pan += panChange
+                                    pan = boundedOriginalPan(pan + panChange, zoom, bitmap.width, bitmap.height, frame)
                                 }
                             }, contentScale = ContentScale.Fit,
                     ) else DIconImage(DIcon.Image, Color(0xFF969EAD), 36.dp)
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("缩放", fontSize = 13.sp)
-                    Slider(zoom, { zoom = it; decodeScale = maxOf(decodeScale, ceil(it).toInt()); if (it == 1f) pan = androidx.compose.ui.geometry.Offset.Zero }, Modifier.weight(1f).padding(horizontal = 8.dp), valueRange = 1f..3f)
+                    Slider(zoom, {
+                        if (active) {
+                            zoom = it
+                            decodeScale = maxOf(decodeScale, ceil(it).toInt())
+                            pan = boundedOriginalPan(pan, zoom, bitmap?.width ?: 0, bitmap?.height ?: 0, frame)
+                        }
+                    }, Modifier.weight(1f).padding(horizontal = 8.dp).testTag("originalZoomSlider"), enabled = active, valueRange = 1f..3f)
                     Text("${(zoom * 100).toInt()}%", fontSize = 13.sp, color = DColors.Muted)
                 }
-                Text("${item.name} · 放大后可拖动查看细节", Modifier.fillMaxWidth().padding(top = 2.dp), color = DColors.Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
+                Text("${presentation.name} · 放大后可拖动查看细节", Modifier.fillMaxWidth().padding(top = 2.dp), color = DColors.Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
             }
         }
     }
+}
+
+internal fun boundedOriginalPan(pan: Offset, zoom: Float, width: Int, height: Int, frame: IntSize): Offset {
+    if (zoom <= 1f || width <= 0 || height <= 0 || frame.width <= 0 || frame.height <= 0) return Offset.Zero
+    val fit = minOf(frame.width.toFloat() / width, frame.height.toFloat() / height)
+    val maxX = ((width * fit * zoom - frame.width) / 2f).coerceAtLeast(0f)
+    val maxY = ((height * fit * zoom - frame.height) / 2f).coerceAtLeast(0f)
+    return Offset(pan.x.coerceIn(-maxX, maxX), pan.y.coerceIn(-maxY, maxY))
 }

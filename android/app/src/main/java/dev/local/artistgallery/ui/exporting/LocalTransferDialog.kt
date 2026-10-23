@@ -23,8 +23,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.local.artistgallery.data.exporting.LocalTransferCoordinator
 import dev.local.artistgallery.data.exporting.LocalTransferState
 import dev.local.artistgallery.data.exporting.TransferKind
@@ -34,18 +32,17 @@ import java.util.Locale
 
 @Composable
 fun LocalTransferDialog(state: LocalTransferState, coordinator: LocalTransferCoordinator, save: () -> Unit, pickRestore: () -> Unit) {
-    if (!state.visible) return
-    Dialog(onDismissRequest = coordinator::hide, properties = DialogProperties(decorFitsSystemWindows = false)) {
+    DAnimatedDialog(state.takeIf { state.visible }, coordinator::hide) { presentation, panel, fraction ->
         val insets = galleryDialogWindowInsets()
-        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f))
+        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction))
             .windowInsetsPadding(insets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { coordinator.hide() }, contentAlignment = Alignment.BottomCenter) {
+            .clickable(enabled = LocalDDialogActive.current, interactionSource = remember { MutableInteractionSource() }, indication = null) { coordinator.hide() }, contentAlignment = Alignment.BottomCenter) {
             Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp).widthIn(max = 398.dp).fillMaxWidth().heightIn(max = maxHeight - 16.dp)
-                .clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
+                .then(panel).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
                 .windowInsetsPadding(insets.only(WindowInsetsSides.Bottom))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
                 .padding(if (maxWidth <= 370.dp) 20.dp else 22.dp)) {
-                LocalTransferContent(state, coordinator::choose, coordinator::toggle, coordinator::previewSelection,
+                LocalTransferContent(presentation, coordinator::choose, coordinator::toggle, coordinator::previewSelection,
                     save, pickRestore, coordinator::confirmRestore, coordinator::cancel, coordinator::hide, coordinator::done, coordinator::chooseScope)
             }
         }
@@ -116,7 +113,7 @@ internal fun ColumnScope.LocalTransferContent(
             LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 360.dp).clip(RoundedCornerShape(22.dp)).background(DColors.Background)) {
                 items(state.choices, key = { it.id }) { choice ->
                     val selected = choice.id in state.selected
-                    Row(Modifier.fillMaxWidth().testTag("transferChoice:${choice.id}").toggleable(selected, role = Role.Checkbox) { toggle(choice.id) }
+                    Row(Modifier.fillMaxWidth().testTag("transferChoice:${choice.id}").toggleable(selected, enabled = LocalDDialogActive.current, role = Role.Checkbox) { toggle(choice.id) }
                         .background(if (selected) DColors.Soft else DColors.Background).padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Box(Modifier.size(22.dp).border(1.dp, if (selected) DColors.Action else DColors.Muted, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
                             if (selected) DIconImage(DIcon.Check, DColors.Action, 18.dp)
