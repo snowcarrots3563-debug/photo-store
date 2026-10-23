@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.unit.dp
 import dev.local.artistgallery.fixture.UiFixtureActivity
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -73,5 +74,30 @@ class NativeMotionDisabledUiTest {
         repeat(4) { compose.mainClock.advanceTimeByFrame() }
         compose.onNodeWithTag("artistLayoutOverlay").assertDoesNotExist()
         compose.runOnIdle { assertEquals(null, motion.session) }
+    }
+
+    @Test fun settingsSwitchAndNoticeReachTerminalStatesWhenMotionIsDisabled() {
+        compose.mainClock.autoAdvance = false
+        var state by mutableStateOf(GalleryUiState())
+        var toggles = 0
+        var closes = 0
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent { DTheme {
+            ManageScreen(state, 20.dp, { event ->
+                when (event) {
+                    is GalleryEvent.SetCardEffects -> { toggles++; state = state.copy(browseOptions = state.browseOptions.copy(cardEffects = event.enabled)) }
+                    GalleryEvent.DismissStorageNotice -> { closes++; state = state.copy(browseOptions = state.browseOptions.copy(storageNoticeDismissed = true)) }
+                    else -> Unit
+                }
+            })
+        } } }
+        compose.onNodeWithTag("manageRow:card").performScrollTo().performClick()
+        repeat(4) { compose.mainClock.advanceTimeByFrame() }
+        compose.onNodeWithTag("manageRow:card").assertIsOn()
+        compose.onNodeWithTag("manageIcon:card", useUnmergedTree = true).assert(SemanticsMatcher.expectValue(DMotionFraction, 1f))
+        compose.onNodeWithTag("manageTrack:card", useUnmergedTree = true).assert(SemanticsMatcher.expectValue(DMotionFraction, 1f))
+        compose.onNodeWithContentDescription("关闭保存提示").performScrollTo().performClick()
+        repeat(4) { compose.mainClock.advanceTimeByFrame() }
+        compose.onNodeWithTag("manageNotice").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(1, toggles); assertEquals(1, closes) }
     }
 }

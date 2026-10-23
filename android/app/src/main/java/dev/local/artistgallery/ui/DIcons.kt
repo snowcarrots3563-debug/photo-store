@@ -31,15 +31,26 @@ enum class DIcon(val path: String) {
     Backup("M4 8l8-5 8 5v11H4zM4 8l8 5 8-5M12 13v6"),
     Restore("M4 9a8 8 0 1 1 1 9M4 4v5h5M12 8v5l3 2"),
     History("M4 3h12l4 4v14H4zM15 3v5h5M8 11h8M8 15h8M8 18h5"),
-    Play("M8 5v14l11-7z"), Pause("M8 5v14M16 5v14");
+    Play("M8 5v14l11-7z"), Pause("M8 5v14M16 5v14"),
+    SettingsImage("M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm-1 13 5-5 5 5 3-3 5 5M14 8h.01"),
+    SettingsDownload("M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4"),
+    SettingsArchive("M4 4h16v4H4zM6 8v13h12V8M10 12h4"),
+    SettingsUpload("M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"),
+    SettingsBackup("M3 11a9 9 0 1 1 2 7M3 5v6h6M12 7v5l3 2"),
+    SettingsFolder("M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"),
+    SettingsSpark("m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"),
+    SettingsPlay("m9 5 11 7-11 7V5Z"),
+    SettingsTrash("M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"),
+    SettingsInfo("M12 16v-4m0-4h.01M3 12a9 9 0 1 0 18 0 9 9 0 1 0-18 0"),
+    SettingsFile("M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h8M8 16h6");
     val vectorPath by lazy { PathParser().parsePathString(path).toPath() }
 }
 
 @Composable
-fun DIconImage(icon: DIcon, color: Color = DColors.Ink, size: Dp = 24.dp) {
+fun DIconImage(icon: DIcon, color: Color = DColors.Ink, size: Dp = 24.dp, strokeWidth: Float = 1.8f) {
     Canvas(Modifier.size(size)) {
         scale(this.size.width / 24f, this.size.height / 24f, pivot = androidx.compose.ui.geometry.Offset.Zero) {
-            drawPath(icon.vectorPath, color, style = Stroke(1.8f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(icon.vectorPath, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
     }
 }
