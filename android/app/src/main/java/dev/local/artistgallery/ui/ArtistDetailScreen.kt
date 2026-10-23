@@ -23,7 +23,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -86,6 +89,12 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
     val tabPill = remember(artistId) { Animatable(if (tabTransitionFrom == ArtistTab.Images) 0f else 1f) }
     LaunchedEffect(state.artistTab) { tabPill.animateTo(if (state.artistTab == ArtistTab.Images) 0f else 1f, tween(280)) }
     var layoutAnchor by remember(artistId, state.artistTab) { mutableStateOf<Pair<ArtistImageLayout, String>?>(null) }
+    var layoutTabs by remember(artistId, state.artistTab) { mutableStateOf<Float?>(null) }
+    val layoutMotion = remember(artistId, state.artistTab) { ArtistLayoutMotionState() }
+    LaunchedEffect(imageSort) { layoutMotion.cancel() }
+    LaunchedEffect(imageSort, state.overlay, state.dialog, state.mediaSelectionMode, loadState) {
+        if (state.overlay != GalleryOverlay.None || state.dialog != GalleryDialog.None || state.mediaSelectionMode || loadState == LoadState.Failed) layoutMotion.cancel()
+    }
     val anchoredPosition = remember(prepared, layoutAnchor) {
         val anchor = layoutAnchor
         if (prepared == null || anchor == null || prepared.layout != anchor.first) null else {
@@ -96,12 +105,13 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
     }
     val scrollKey = "artist:$artistId:${state.artistTab}:${imageLayout.name}" +
         if (state.artistTab == ArtistTab.Images) ":${imageSort.name}" else ""
+    Box(Modifier.fillMaxSize()) {
     key(scrollKey) {
         val position = anchoredPosition ?: state.scrollPositions[scrollKey] ?: GalleryScrollPosition()
         val listState = rememberLazyListState(position.index, position.offset)
         var realListWasBound by remember { mutableStateOf(false) }
         var collapsedTabs by rememberSaveable(scrollKey) {
-            mutableFloatStateOf(if (position.index > 0 || position.offset > 0) Float.MAX_VALUE else 0f)
+            mutableFloatStateOf(layoutTabs ?: if (position.index > 0 || position.offset > 0) Float.MAX_VALUE else 0f)
         }
         var tabsHeight by remember { mutableFloatStateOf(0f) }
         val scrollScope = rememberCoroutineScope()
@@ -119,6 +129,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
         val tabScrollConnection = remember(listState) {
             object : NestedScrollConnection {
                 override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    if (source == NestedScrollSource.UserInput && available != Offset.Zero) layoutMotion.cancel()
                     if (source == NestedScrollSource.UserInput && available.y != 0f) scrollTopJob?.cancel()
                     if (available.y >= 0f || tabsHeight == 0f) return Offset.Zero
                     val before = collapsedTabs
@@ -209,6 +220,8 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                                     ArtistImageLayout.Medium -> ArtistImageLayout.List
                                 }
                                 layoutAnchor = media?.let { next to it.id }
+                                layoutTabs = collapsedTabs
+                                layoutMotion.begin(next)
                                 rememberPosition(); onEvent(GalleryEvent.CycleImageLayout)
                             }
                         }
@@ -218,7 +231,19 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                     }
                 }
             }
-            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned {
+                val bounds = androidx.compose.ui.geometry.Rect(it.positionInRoot(), androidx.compose.ui.geometry.Size(it.size.width.toFloat(), it.size.height.toFloat()))
+                val before = layoutMotion.viewport
+                if (before.width > 0 && before.size != bounds.size) layoutMotion.cancel()
+                layoutMotion.viewport = bounds
+            }.pointerInput(layoutMotion) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.changes.any { it.changedToDownIgnoreConsumed() }) layoutMotion.cancel()
+                    }
+                }
+            }) {
                 val tileSize = ((maxWidth - padding * 2 - 3.dp * (columns - 1)) / columns).coerceAtLeast(1.dp)
                 val listLayout = imageLayout == ArtistImageLayout.List
                 val viewportRows = ceil(maxHeight.value / (if (listLayout) 92f else tileSize.value)).toInt() + 2
@@ -275,12 +300,13 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                     }
                 }
                 val loading = loadState != LoadState.Failed && (!dataReady || !initialPreviewsReady)
-                val layoutReveal = remember { Animatable(if (layoutAnchor?.first == imageLayout) 0f else 1f) }
-                LaunchedEffect(loading) { if (!loading && layoutReveal.value < 1f) layoutReveal.animateTo(1f, tween(280)) }
                 val reveal = remember { Animatable(if (loading) 0f else 1f) }
                 var revealSkeleton by remember { mutableStateOf(loading) }
-                LaunchedEffect(loading, loadState) {
+                LaunchedEffect(loading, loadState, layoutMotion.session != null) {
                     if (loadState == LoadState.Failed) {
+                        revealSkeleton = false
+                        reveal.snapTo(1f)
+                    } else if (layoutMotion.session != null) {
                         revealSkeleton = false
                         reveal.snapTo(1f)
                     } else if (loading) {
@@ -296,10 +322,17 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                     loadState == LoadState.Failed -> Box(Modifier.fillMaxWidth().padding(horizontal = padding)) {
                         dLoadState(LoadState.Failed) { onEvent(GalleryEvent.RetryLoad) }
                     }
-                    loading -> ArtistLoadingSkeleton(imageLayout, state.artistTab, prepared, imageSort, position, padding, requireNotNull(skeletonPhase), detail?.collections, artist?.collectionCount, state.mediaSelectionMode, selectingCollections)
+                    loading -> if (layoutMotion.session == null) ArtistLoadingSkeleton(imageLayout, state.artistTab, prepared, imageSort, position, padding, requireNotNull(skeletonPhase), detail?.collections, artist?.collectionCount, state.mediaSelectionMode, selectingCollections)
                     else -> {
-                        SideEffect { realListWasBound = true; if (layoutAnchor?.first == imageLayout) layoutAnchor = null }
-                        LazyColumn(Modifier.fillMaxSize().graphicsLayer { alpha = .88f + .12f * layoutReveal.value }.onGloballyPositioned { reorder.viewport = it.boundsInRoot() }.nestedScroll(tabScrollConnection).testTag("artistMediaList"), state = listState, contentPadding = PaddingValues(start = padding, end = padding, bottom = 126.dp)) {
+                        SideEffect {
+                            realListWasBound = true
+                            layoutMotion.bind(imageLayout)
+                            if (layoutAnchor?.first == imageLayout) { layoutAnchor = null; layoutTabs = null }
+                        }
+                        LazyColumn(Modifier.fillMaxSize().graphicsLayer {
+                            alpha = layoutMotion.contentAlpha(imageLayout)
+                        }.semantics { motionFraction = layoutMotion.contentAlpha(imageLayout) }
+                            .onGloballyPositioned { reorder.viewport = it.boundsInRoot() }.nestedScroll(tabScrollConnection).testTag("artistMediaList"), state = listState, contentPadding = PaddingValues(start = padding, end = padding, bottom = 126.dp)) {
                 if (state.artistTab == ArtistTab.Images) {
                     if (state.mediaItems.isEmpty()) item {
                         val defaultName = collections.firstOrNull { it.isDefault }?.name ?: "默认图集"
@@ -308,15 +341,19 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                     else if (imageLayout == ArtistImageLayout.List) itemsIndexed(state.mediaItems, key = { _, media -> media.id }) { index, media ->
                         if (index > 0) Spacer(Modifier.height(8.dp))
                         Box {
+                        val thumbnail: @Composable (Modifier) -> Unit = { modifier ->
+                            ArtistLayoutThumbnail(media, previewDecoder, layoutMotion, imageLayout, modifier, 18.dp,
+                                !revealSkeleton, IntSize(thumbnailPx, thumbnailPx))
+                        }
                         if (state.mediaSelectionMode) {
                             Box(Modifier.testTag("artistSelectedRow:${media.id}")) {
-                                MediaListItem(media, previewDecoder, selected = media.id in state.selectedMediaIds, onSelect = { onEvent(GalleryEvent.ToggleMediaSelection(media.id)) }, focusOnLoad = true, revealDetail = !revealSkeleton)
+                                MediaListItem(media, previewDecoder, selected = media.id in state.selectedMediaIds, onSelect = { onEvent(GalleryEvent.ToggleMediaSelection(media.id)) }, focusOnLoad = true, revealDetail = !revealSkeleton, thumbnail = thumbnail)
                             }
                         } else if (!state.browseOptions.swipeDelete) {
                             MediaListItem(media, previewDecoder,
                                 onOpen = { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) },
-                                onLongClick = { onEvent(GalleryEvent.StartMediaSelection(media.id)) }, focusOnLoad = true, revealDetail = !revealSkeleton)
-                        } else SwipeMediaItem(media, previewDecoder, { onEvent(GalleryEvent.OpenDeleteMedia(media.id)) }, { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) }, { onEvent(GalleryEvent.StartMediaSelection(media.id)) }, revealDetail = !revealSkeleton)
+                                onLongClick = { onEvent(GalleryEvent.StartMediaSelection(media.id)) }, focusOnLoad = true, revealDetail = !revealSkeleton, thumbnail = thumbnail)
+                        } else SwipeMediaItem(media, previewDecoder, { onEvent(GalleryEvent.OpenDeleteMedia(media.id)) }, { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) }, { onEvent(GalleryEvent.StartMediaSelection(media.id)) }, revealDetail = !revealSkeleton, thumbnail = thumbnail)
                         if (revealSkeleton && skeletonPhase != null) ArtistLoadingRow(skeletonPhase,
                             Modifier.matchParentSize().graphicsLayer { alpha = 1f - reveal.value })
                         }
@@ -347,7 +384,7 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
                                                     if (state.mediaSelectionMode) onEvent(GalleryEvent.ToggleMediaSelection(media.id))
                                                     else { rememberPosition(); onEvent(GalleryEvent.OpenMedia(media.id)) }
                                                 })) {
-                                            MediaThumbnail(media.storageKey, media.type, previewDecoder, Modifier.fillMaxSize().graphicsLayer { scaleX = selectionScale.value; scaleY = selectionScale.value }, cornerRadius = 0.dp, focusOnLoad = true, revealDetail = !revealSkeleton,
+                                            ArtistLayoutThumbnail(media, previewDecoder, layoutMotion, imageLayout, Modifier.fillMaxSize().graphicsLayer { scaleX = selectionScale.value; scaleY = selectionScale.value }, cornerRadius = 0.dp, revealDetail = !revealSkeleton,
                                                 initialSizePx = IntSize(cellWidths[column], cellWidths[column]))
                                             if (revealSkeleton && skeletonPhase != null) ArtistLoadingTile(skeletonPhase,
                                                 Modifier.matchParentSize().graphicsLayer { alpha = 1f - reveal.value })
@@ -408,10 +445,12 @@ fun ArtistDetailScreen(state: GalleryUiState, padding: Dp, fixtureCover: (@Compo
             }
         }
     }
+    ArtistLayoutMotionOverlay(layoutMotion, Modifier.matchParentSize())
+    }
 }
 
 @Composable
-private fun SwipeMediaItem(item: MediaAssetSummary, decoder: PreviewDecoder?, onDelete: () -> Unit, onOpen: () -> Unit, onLongClick: () -> Unit, revealDetail: Boolean = true) {
+private fun SwipeMediaItem(item: MediaAssetSummary, decoder: PreviewDecoder?, onDelete: () -> Unit, onOpen: () -> Unit, onLongClick: () -> Unit, revealDetail: Boolean = true, thumbnail: (@Composable (Modifier) -> Unit)? = null) {
     val width = with(LocalDensity.current) { 80.dp.toPx() }
     var revealed by rememberSaveable(item.id) { mutableStateOf(false) }
     var offset by remember(item.id, width) { mutableFloatStateOf(if (revealed) -width else 0f) }
@@ -443,7 +482,7 @@ private fun SwipeMediaItem(item: MediaAssetSummary, decoder: PreviewDecoder?, on
             }
         }
         Box(Modifier.offset { IntOffset(offset.roundToInt(), 0) }.testTag("artistSwipeContent:${item.id}")) {
-            MediaListItem(item, decoder, onOpen = { if (offset < 0f) settle(false) else onOpen() }, onLongClick = { settle(false); onLongClick() }, focusOnLoad = true, revealDetail = revealDetail)
+            MediaListItem(item, decoder, onOpen = { if (offset < 0f) settle(false) else onOpen() }, onLongClick = { settle(false); onLongClick() }, focusOnLoad = true, revealDetail = revealDetail, thumbnail = thumbnail)
         }
     }
 }

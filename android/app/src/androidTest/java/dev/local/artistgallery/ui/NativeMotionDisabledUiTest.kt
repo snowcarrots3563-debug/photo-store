@@ -2,9 +2,14 @@ package dev.local.artistgallery.ui
 
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.asImageBitmap
+import dev.local.artistgallery.data.ArtistImageLayout
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
@@ -49,5 +54,24 @@ class NativeMotionDisabledUiTest {
         repeat(2) { compose.mainClock.advanceTimeByFrame() }
         compose.onNode(isDialog()).assertDoesNotExist()
         compose.onNodeWithText("内容").assertIsDisplayed()
+    }
+
+    @Test fun viewLayoutReachesItsDestinationAndReleasesOverlayWithAnimationScaleZero() {
+        compose.mainClock.autoAdvance = false
+        val motion = ArtistLayoutMotionState()
+        val image = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+        motion.viewport = Rect(0f, 0f, 1000f, 1000f)
+        motion.register("sample", ArtistLayoutMotionEntry(ArtistImageLayout.List, Rect(20f, 40f, 80f, 100f), image, 18f, false))
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            Box(Modifier.fillMaxSize()) { ArtistLayoutMotionOverlay(motion, Modifier.fillMaxSize()) }
+        } }
+        compose.runOnIdle {
+            motion.begin(ArtistImageLayout.Large)
+            motion.position("sample", ArtistLayoutMotionEntry(ArtistImageLayout.Large, Rect(180f, 200f, 300f, 320f), radius = 0f, video = false))
+            motion.bind(ArtistImageLayout.Large)
+        }
+        repeat(4) { compose.mainClock.advanceTimeByFrame() }
+        compose.onNodeWithTag("artistLayoutOverlay").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(null, motion.session) }
     }
 }

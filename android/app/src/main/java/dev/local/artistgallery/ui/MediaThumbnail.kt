@@ -18,14 +18,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -41,10 +44,12 @@ import dev.local.artistgallery.data.preview.startIfAnimated
 import dev.local.artistgallery.data.preview.stopIfAnimated
 import dev.local.artistgallery.model.MediaType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collect
 
 @Composable
-fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp, focusOnLoad: Boolean = false, revealDetail: Boolean = true, initialSizePx: IntSize = IntSize.Zero) {
+fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewDecoder?, modifier: Modifier = Modifier, cornerRadius: Dp = 18.dp, focusOnLoad: Boolean = false, revealDetail: Boolean = true, initialSizePx: IntSize = IntSize.Zero, initialImage: ImageBitmap? = null, onPresentedImage: ((ImageBitmap?) -> Unit)? = null) {
     var size by remember(initialSizePx) { mutableStateOf(initialSizePx) }
+    var carriedImage by remember(storageKey, type, previewDecoder) { mutableStateOf(initialImage) }
     var image by remember(storageKey, type, previewDecoder, size, focusOnLoad) {
         mutableStateOf<Bitmap?>(if (size.width > 0 && size.height > 0) {
             previewDecoder?.cachedThumbnail(storageKey, size.width, size.height, type)
@@ -74,21 +79,33 @@ fun MediaThumbnail(storageKey: String, type: MediaType, previewDecoder: PreviewD
         }
     }
     // Decode independently: a page skeleton may still cover this cell when detail arrives.
-    LaunchedEffect(image, preview != null, revealDetail) {
-        if (image != null && preview != null && revealDetail) {
+    LaunchedEffect(image, preview != null, carriedImage != null, revealDetail) {
+        if (image != null && (preview != null || carriedImage != null) && revealDetail) {
             clarity.animateTo(1f, tween(350))
             preview = null
+            carriedImage = null
+        }
+    }
+    val sharpImage = remember(image) { image?.asImageBitmap() }
+    val gaussianImage = remember(preview) { preview?.asImageBitmap() }
+    if (onPresentedImage != null) {
+        val report by rememberUpdatedState(onPresentedImage)
+        LaunchedEffect(sharpImage, gaussianImage, carriedImage, clarity, revealDetail) {
+            // Report sharpening detail instead of reverting the next layout to Gaussian blur.
+            snapshotFlow {
+                if (sharpImage != null && (carriedImage == null && gaussianImage == null || revealDetail && clarity.value > 0f)) sharpImage
+                else carriedImage ?: gaussianImage
+            }.collect { report(it) }
         }
     }
     Box(modifier.onSizeChanged { size = it }.clip(RoundedCornerShape(cornerRadius)).background(Color(0xFFEFF1F5)), contentAlignment = Alignment.Center) {
-        preview?.let { Image(it.asImageBitmap(), contentDescription = null,
+        (carriedImage ?: gaussianImage)?.let { Image(it, contentDescription = null,
             modifier = Modifier.fillMaxSize().graphicsLayer { alpha = ((1f - clarity.value) / .2f).coerceIn(0f, 1f) },
             contentScale = ContentScale.Crop, filterQuality = FilterQuality.High) }
-        val bitmap = image
-        if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null,
-            modifier = if (preview != null) Modifier.fillMaxSize().graphicsLayer { alpha = clarity.value } else Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        else if (preview == null) DIconImage(if (type == MediaType.VIDEO) DIcon.Play else DIcon.Image, Color(0xFF969EAD))
-        if (type == MediaType.VIDEO && bitmap != null) {
+        if (sharpImage != null) Image(sharpImage, contentDescription = null,
+            modifier = if (preview != null || carriedImage != null) Modifier.fillMaxSize().graphicsLayer { alpha = clarity.value } else Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        else if (preview == null && carriedImage == null) DIconImage(if (type == MediaType.VIDEO) DIcon.Play else DIcon.Image, Color(0xFF969EAD))
+        if (type == MediaType.VIDEO && (sharpImage != null || carriedImage != null)) {
             Box(Modifier.size(40.dp).background(Color.Black.copy(alpha = .5f), CircleShape), contentAlignment = Alignment.Center) {
                 DIconImage(DIcon.Play, Color.White)
             }

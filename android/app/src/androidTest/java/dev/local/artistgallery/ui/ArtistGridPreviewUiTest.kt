@@ -113,7 +113,65 @@ class ArtistGridPreviewUiTest {
 
     private val scrollKey = "artist:artist:Images:Large:NameAscending"
 
-    private fun show(media: List<MediaAssetSummary>, savedIndex: Int = 0, height: Dp = 640.dp) {
+    @Test fun realCachedThumbnailsMoveAcrossAllThreeLayoutsWithoutReplayingLoading() = runBlocking {
+        val media = fixtures()
+        show(media)
+        waitForGrid("image0")
+        compose.mainClock.advanceTimeBy(800)
+        compose.onNodeWithText("切换视图").performClick()
+        waitForGrid("image0")
+        compose.mainClock.advanceTimeBy(160)
+        val moving = compose.onNodeWithTag("artistLayoutOverlay").fetchSemanticsNode().config[DMotionFraction]
+        assertTrue(moving > 0f && moving < 1f)
+        compose.onNodeWithTag("artistDetailLoading").assertDoesNotExist()
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithTag("artistLayoutOverlay").assertDoesNotExist()
+        compose.onNodeWithText("切换视图").performClick()
+        compose.waitUntil(20_000) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.onAllNodesWithText("0.png").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithText("0.png").assertIsDisplayed()
+        compose.onNodeWithText("切换视图").performClick()
+        waitForGrid("image0")
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithTag("artistTile:image0").assertIsDisplayed()
+        compose.onNodeWithTag("artistLayoutOverlay").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(ArtistImageLayout.Large, current.value.browseOptions.imageLayout) }
+        Unit
+    }
+
+    @Test fun rapidSwitchWhilePreparationLagsKeepsOldEndpointsHidden() = runBlocking {
+        val media = fixtures()
+        show(media, deferLayout = true)
+        waitForGrid("image0")
+        compose.mainClock.advanceTimeBy(800)
+        compose.onNodeWithText("切换视图").performClick()
+        compose.onNodeWithTag("artistMediaList").assert(SemanticsMatcher.expectValue(DMotionFraction, 0f))
+        compose.runOnIdle { current.value = current.value.withPreparedMedia(media) }
+        waitForGrid("image0")
+        compose.mainClock.advanceTimeBy(160)
+        compose.onNodeWithText("切换视图").performClick()
+        compose.runOnIdle {
+            assertEquals(ArtistImageLayout.List, current.value.browseOptions.imageLayout)
+            assertEquals(ArtistImageLayout.Medium, current.value.preparedMedia?.layout)
+        }
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithTag("artistMediaList").assert(SemanticsMatcher.expectValue(DMotionFraction, 0f))
+        compose.onNodeWithTag("artistLayoutOverlay").assert(SemanticsMatcher.expectValue(DMotionFraction, 0f))
+        compose.runOnIdle { current.value = current.value.withPreparedMedia(media) }
+        compose.waitUntil(20_000) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.onAllNodesWithText("0.png").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.mainClock.advanceTimeBy(700)
+        compose.onNodeWithText("0.png").assertIsDisplayed()
+        compose.onNodeWithTag("artistLayoutOverlay").assertDoesNotExist()
+        Unit
+    }
+
+    private fun show(media: List<MediaAssetSummary>, savedIndex: Int = 0, height: Dp = 640.dp, deferLayout: Boolean = false) {
         val initial = GalleryUiState(loadState = LoadState.Ready, mediaLoadState = LoadState.Ready,
             route = GalleryRoute.Artist("artist"),
             artistDetail = ArtistDetail(ArtistSummary("artist", "预览样本", 0, media.size), emptyList()),
@@ -130,6 +188,15 @@ class ArtistGridPreviewUiTest {
                 Box(Modifier.size(360.dp, viewportHeight.value)) {
                     if (visible.value) ArtistDetailScreen(current.value, 18.dp, null, decoder) { event ->
                         when (event) {
+                            GalleryEvent.CycleImageLayout -> {
+                                val next = when (current.value.browseOptions.imageLayout) {
+                                    ArtistImageLayout.List -> ArtistImageLayout.Large
+                                    ArtistImageLayout.Large -> ArtistImageLayout.Medium
+                                    ArtistImageLayout.Medium -> ArtistImageLayout.List
+                                }
+                                val updated = current.value.copy(browseOptions = current.value.browseOptions.copy(imageLayout = next))
+                                current.value = if (deferLayout) updated else updated.withPreparedMedia(media)
+                            }
                             is GalleryEvent.RememberScrollPosition -> current.value = current.value.copy(
                                 scrollPositions = current.value.scrollPositions + (event.key to GalleryScrollPosition(event.index, event.offset)))
                             is GalleryEvent.OpenMedia -> visible.value = false

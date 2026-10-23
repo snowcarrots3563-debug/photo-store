@@ -10,6 +10,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
@@ -170,7 +171,25 @@ class MediaThumbnailFocusUiTest {
         assertNull(videoDecoder.cachedGaussianPreview(key, MediaType.VIDEO))
     }
 
-    private fun show(key: String, focus: Boolean = true, type: MediaType = MediaType.IMAGE, previewDecoder: PreviewDecoder = decoder, allowClarity: Boolean = true) {
+    @Test fun layoutSnapshotStaysVisibleUntilDetailCanRevealAndReportsSharpeningImage() = runBlocking {
+        val key = png(Color.BLUE)
+        decoder.decodeGaussianPreview(key)
+        val carried = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }.asImageBitmap()
+        var reported: ImageBitmap? = null
+        show(key, allowClarity = false, initialImage = carried, report = { reported = it })
+        waitForFinal(key)
+        compose.mainClock.advanceTimeBy(300)
+        assertTrue(capture().toPixelMap()[targetPx / 2, targetPx / 2].red > .9f)
+        compose.runOnIdle { assertSame(carried, reported); reveal.value = true }
+        compose.mainClock.advanceTimeBy(120)
+        compose.runOnIdle { assertNotNull(reported); assertNotSame(carried, reported) }
+        compose.mainClock.advanceTimeBy(500)
+        val final = capture().toPixelMap()[targetPx / 2, targetPx / 2]
+        assertTrue(final.blue > .9f && final.red < .1f)
+        Unit
+    }
+
+    private fun show(key: String, focus: Boolean = true, type: MediaType = MediaType.IMAGE, previewDecoder: PreviewDecoder = decoder, allowClarity: Boolean = true, initialImage: ImageBitmap? = null, report: ((ImageBitmap?) -> Unit)? = null) {
         compose.mainClock.autoAdvance = false
         currentKey = mutableStateOf(key)
         visible = mutableStateOf(true)
@@ -179,7 +198,7 @@ class MediaThumbnailFocusUiTest {
             DTheme {
                 if (visible.value) {
                     val modifier = Modifier.size(128.dp).testTag("thumbnail")
-                    if (focus) MediaThumbnail(currentKey.value, type, previewDecoder, modifier, cornerRadius = 0.dp, focusOnLoad = true, revealDetail = reveal.value)
+                    if (focus) MediaThumbnail(currentKey.value, type, previewDecoder, modifier, cornerRadius = 0.dp, focusOnLoad = true, revealDetail = reveal.value, initialImage = initialImage, onPresentedImage = report)
                     else MediaThumbnail(currentKey.value, type, previewDecoder, modifier, cornerRadius = 0.dp)
                 }
             }

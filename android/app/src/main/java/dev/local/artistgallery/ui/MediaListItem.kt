@@ -34,6 +34,7 @@ fun MediaListItem(
     onLongClick: (() -> Unit)? = null,
     focusOnLoad: Boolean = false,
     revealDetail: Boolean = true,
+    thumbnail: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val background by animateColorAsState(if (selected && onSelect != null) DColors.Soft else DColors.Panel, tween(160), label = "selectedMediaRow")
     Row(
@@ -48,7 +49,7 @@ fun MediaListItem(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         val thumbnailPx = with(LocalDensity.current) { 68.dp.roundToPx() }
-        MediaThumbnail(item.storageKey, item.type, previewDecoder, Modifier.size(68.dp), focusOnLoad = focusOnLoad, revealDetail = revealDetail,
+        if (thumbnail != null) thumbnail(Modifier.size(68.dp)) else MediaThumbnail(item.storageKey, item.type, previewDecoder, Modifier.size(68.dp), focusOnLoad = focusOnLoad, revealDetail = revealDetail,
             initialSizePx = if (focusOnLoad) IntSize(thumbnailPx, thumbnailPx) else IntSize.Zero)
         Column(Modifier.weight(1f)) {
             Text(item.name, fontSize = 15.sp, lineHeight = 21.sp, maxLines = 2)
