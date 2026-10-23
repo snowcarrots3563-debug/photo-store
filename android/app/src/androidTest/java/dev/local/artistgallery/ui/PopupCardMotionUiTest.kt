@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -77,7 +78,7 @@ class PopupCardMotionUiTest {
         compose.runOnIdle { assertEquals(1, actions) }
     }
 
-    @Test fun firstEntryAndStepReplacementUseDistinctMotionWithoutReplayingProgress() {
+    @Test fun firstEntryComesFromBelowWindowAndSettlesQuicklyWithoutFadingOrReplayingProgress() {
         compose.mainClock.autoAdvance = false
         var value by mutableStateOf<String?>(null)
         var step by mutableIntStateOf(0)
@@ -91,11 +92,17 @@ class PopupCardMotionUiTest {
         compose.runOnIdle { value = "首次" }
         compose.mainClock.advanceTimeByFrame()
         val panel = compose.onNodeWithTag("animatedPanel")
-        assertTrue(panel.fetchSemanticsNode().config[DPopupSlide] > 60f)
-        compose.mainClock.advanceTimeBy(220)
+        val windowHeight = compose.onNodeWithTag("mask").fetchSemanticsNode().boundsInRoot.height / compose.density.density
+        val start = panel.fetchSemanticsNode().config[DPopupSlide]
+        assertTrue("A whole card must enter from below the window", start > windowHeight * .65f)
+        compose.mainClock.advanceTimeBy(80)
+        panel.assert(SemanticsMatcher.expectValue(DPopupOpacity, 1f))
+        val moving = panel.fetchSemanticsNode().config[DPopupSlide]
+        assertTrue(moving > 0f && moving < start)
+        compose.mainClock.advanceTimeBy(160)
+        panel.assert(SemanticsMatcher.expectValue(DPopupSlide, 0f))
+        panel.assert(SemanticsMatcher.expectValue(DPopupOpacity, 1f))
         compose.onNodeWithTag("mask").assert(SemanticsMatcher.expectValue(DMotionFraction, 1f))
-        assertTrue(panel.fetchSemanticsNode().config[DPopupOpacity] < 1f)
-        compose.mainClock.advanceTimeBy(250)
         compose.runOnIdle { value = "下一步"; step = 1 }
         compose.mainClock.advanceTimeByFrame()
         val slide = panel.fetchSemanticsNode().config[DPopupSlide]
@@ -134,16 +141,35 @@ class PopupCardMotionUiTest {
         compose.mainClock.autoAdvance = false
         var value by mutableStateOf<String?>(null)
         compose.activityRule.scenario.onActivity { activity -> activity.setContent { DTheme {
-            DAnimatedDialog(value, { value = null }) { model, panel, _ -> Text(model, panel.testTag("reopenedPanel")) }
+            DAnimatedDialog(value, { value = null }) { model, panel, _ ->
+                Box(Modifier.fillMaxSize().testTag("reopenedWindow")) { Text(model, panel.testTag("reopenedPanel")) }
+            }
         } } }
         repeat(2) { index ->
             compose.runOnIdle { value = "第${index + 1}次" }
             compose.mainClock.advanceTimeByFrame()
-            assertTrue(compose.onNodeWithTag("reopenedPanel").fetchSemanticsNode().config[DPopupSlide] > 60f)
+            val windowHeight = compose.onNodeWithTag("reopenedWindow").fetchSemanticsNode().boundsInRoot.height / compose.density.density
+            assertTrue(compose.onNodeWithTag("reopenedPanel").fetchSemanticsNode().config[DPopupSlide] > windowHeight * .65f)
             compose.mainClock.advanceTimeBy(500)
             compose.runOnIdle { value = null }
             compose.mainClock.advanceTimeBy(250)
             compose.onNode(isDialog()).assertDoesNotExist()
         }
+    }
+
+    @Test fun centeredDialogKeepsItsExistingGradualEntryAndDoesNotTravelFromTheBottom() {
+        compose.mainClock.autoAdvance = false
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent { DTheme {
+            DAnimatedDialog("居中选择", {}, centered = true) { model, panel, _ ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(model, panel.testTag("centeredPanel")) }
+            }
+        } } }
+        compose.mainClock.advanceTimeBy(220)
+        val panel = compose.onNodeWithTag("centeredPanel")
+        panel.assert(SemanticsMatcher.expectValue(DPopupSlide, 0f))
+        val opacity = panel.fetchSemanticsNode().config[DPopupOpacity]
+        assertTrue(opacity > 0f && opacity < 1f)
+        compose.mainClock.advanceTimeBy(300)
+        panel.assert(SemanticsMatcher.expectValue(DPopupOpacity, 1f))
     }
 }

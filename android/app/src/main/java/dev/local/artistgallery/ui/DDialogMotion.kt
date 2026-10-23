@@ -6,7 +6,7 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -48,14 +48,9 @@ internal fun <T : Any> DAnimatedDialog(
         lastValue = null
         return
     }
-    val transition = updateTransition(visibility, label = "dialogVisibility")
     val entry = CubicBezierEasing(.215f, .61f, .355f, 1f)
+    val quickEntry = CubicBezierEasing(.2f, .8f, .2f, 1f)
     val exit = CubicBezierEasing(.23f, 1f, .32f, 1f)
-    val opacity = transition.animateFloat(transitionSpec = { if (targetState) tween(400, easing = entry) else tween(180, easing = exit) }, label = "dialogOpacity") { if (it) 1f else 0f }
-    val slide = transition.animateFloat(transitionSpec = { if (targetState) tween(400, easing = entry) else tween(180, easing = exit) }, label = "dialogSlide") {
-        if (it) 0f else if (active) 80f else 55f
-    }
-    val scrim = transition.animateFloat(transitionSpec = { tween(if (targetState) 200 else 160, easing = exit) }, label = "dialogScrim") { if (it) 1f else 0f }
     val presentation = lastValue ?: return
     val page = remember(shownKey) { Animatable(if (replacing) 0f else 1f) }
     LaunchedEffect(page) { if (page.value < 1f) page.animateTo(1f, tween(240, easing = entry)) }
@@ -67,13 +62,19 @@ internal fun <T : Any> DAnimatedDialog(
             if (!active) { focus.clearFocus(force = true); keyboard?.hide() }
         }
         CompositionLocalProvider(LocalDDialogActive provides active) {
-            Box(Modifier.fillMaxSize().then(if (active) Modifier else Modifier
+            BoxWithConstraints(Modifier.fillMaxSize().then(if (active) Modifier else Modifier
                 .clearAndSetSemantics { }
                 .pointerInput(Unit) {
                     awaitPointerEventScope {
                         while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
                     }
                 })) {
+                val transition = updateTransition(visibility, label = "dialogVisibility")
+                val opacity = transition.animateFloat(transitionSpec = { if (targetState) tween(if (centered) 400 else 0, easing = entry) else tween(180, easing = exit) }, label = "dialogOpacity") { if (it) 1f else 0f }
+                val slide = transition.animateFloat(transitionSpec = { if (targetState) tween(if (centered) 400 else 220, easing = if (centered) entry else quickEntry) else tween(180, easing = exit) }, label = "dialogSlide") {
+                    if (it) 0f else if (active) maxHeight.value else 55f
+                }
+                val scrim = transition.animateFloat(transitionSpec = { tween(if (targetState) { if (centered) 200 else 120 } else 160, easing = exit) }, label = "dialogScrim") { if (it) 1f else 0f }
                 content(presentation, Modifier.graphicsLayer {
                     alpha = opacity.value * page.value
                     if (centered) {
