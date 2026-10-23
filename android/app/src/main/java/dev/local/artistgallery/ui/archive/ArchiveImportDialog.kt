@@ -1,18 +1,16 @@
 package dev.local.artistgallery.ui.archive
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
@@ -43,7 +41,7 @@ fun ArchiveImportDialog(
     var password by remember(state.step, state.taskId, state.message) { mutableStateOf("") }
     DisposableEffect(state.step) { onDispose { password = "" } }
     LaunchedEffect(state.visible) { if (!state.visible) password = "" }
-    DAnimatedDialog(Triple(state, artists, coordinator.hasSelection).takeIf { state.visible }, coordinator::hide) { model, panel, fraction ->
+    DAnimatedDialog(Triple(state, artists, coordinator.hasSelection).takeIf { state.visible }, coordinator::hide, contentKey = state.step) { model, panel, fraction ->
         val state = model.first
         val artists = model.second
         val active = LocalDDialogActive.current
@@ -61,22 +59,14 @@ fun ArchiveImportDialog(
         val keyboard = LocalSoftwareKeyboardController.current
         LaunchedEffect(state.step) { if (state.step != ArchiveStep.Password) keyboard?.hide() }
         val dialogInsets = galleryDialogWindowInsets(includeIme = state.step == ArchiveStep.Password)
-        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction)).windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { coordinator.hide() }, contentAlignment = Alignment.BottomCenter) {
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp).widthIn(max = 398.dp).fillMaxWidth().wrapContentHeight().heightIn(max = maxHeight - 16.dp)
-                .then(panel).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
-                .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom))
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
-                .padding(if (maxWidth <= 370.dp) 20.dp else 22.dp).semantics { paneTitle = title }) {
-                Row(Modifier.fillMaxWidth().padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (state.step !in setOf(ArchiveStep.Preparing, ArchiveStep.Importing, ArchiveStep.Result, ArchiveStep.History)) {
-                        DIconButton(DIcon.Back, "上一步") {
-                            if (state.step == ArchiveStep.Source) { coordinator.done(); backToMenu() } else coordinator.back()
-                        }
-                    }
-                    Text(title, Modifier.weight(1f).padding(start = 6.dp).semantics { heading() }, style = MaterialTheme.typography.headlineSmall)
-                    DIconButton(DIcon.Close, "关闭窗口") { coordinator.hide() }
-                }
+        DPopupCard(panel, fraction, dialogInsets, coordinator::hide) { card ->
+            val scroll = key(state.step) { rememberScrollState() }
+            val scrollable = state.step in setOf(ArchiveStep.Source, ArchiveStep.Target, ArchiveStep.Password, ArchiveStep.Preparing, ArchiveStep.Importing)
+            Column(card.then(if (scrollable) Modifier.verticalScroll(scroll) else Modifier).semantics { paneTitle = title }) {
+                DPopupHeader(title, onClose = coordinator::hide, closeLabel = "关闭窗口",
+                    onBack = if (state.step !in setOf(ArchiveStep.Preparing, ArchiveStep.Importing, ArchiveStep.Result, ArchiveStep.History)) { {
+                        if (state.step == ArchiveStep.Source) { coordinator.done(); backToMenu() } else coordinator.back()
+                    } } else null)
                 val artist = artists.firstOrNull { it.id == state.artistId }
                 if (artist != null && state.step != ArchiveStep.Target) Hint(listOfNotNull(artist.name, if (isFolder) "文件夹" else state.format.takeIf { it.isNotBlank() }, state.files.firstOrNull()).joinToString(" · "))
                 state.message?.let { Text(it, fontSize = 13.sp, lineHeight = 22.sp, color = DColors.Error, modifier = Modifier.padding(bottom = 10.dp).semantics { liveRegion = LiveRegionMode.Polite }) }

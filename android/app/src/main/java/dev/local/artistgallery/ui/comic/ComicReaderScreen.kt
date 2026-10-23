@@ -3,6 +3,8 @@ package dev.local.artistgallery.ui.comic
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -38,8 +42,9 @@ import dev.local.artistgallery.ui.GalleryEvent
 import dev.local.artistgallery.ui.GalleryUiState
 import dev.local.artistgallery.ui.GalleryScrollPosition
 import dev.local.artistgallery.ui.DAnimatedDialog
+import dev.local.artistgallery.ui.DPopupCard
+import dev.local.artistgallery.ui.DPopupHeader
 import dev.local.artistgallery.ui.LocalDDialogActive
-import androidx.compose.foundation.interaction.MutableInteractionSource
 
 @Composable
 fun ComicReaderScreen(state: GalleryUiState, previewDecoder: PreviewDecoder?, onEvent: (GalleryEvent) -> Unit) {
@@ -120,14 +125,13 @@ private fun ComicSortDialog(direction: ComicDirection?, onDismiss: () -> Unit, o
     DAnimatedDialog(direction, onDismissRequest = onDismiss) { presentation, panel, fraction ->
         val active = LocalDDialogActive.current
         val dialogInsets = galleryDialogWindowInsets()
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f * fraction))
-            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
-            .windowInsetsPadding(dialogInsets), contentAlignment = Alignment.TopEnd) {
-            Column(Modifier.padding(top = 132.dp, end = 16.dp).then(panel).width(240.dp).clip(RoundedCornerShape(28.dp)).background(DColors.Panel)
-                .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { }.padding(vertical = 12.dp)) {
-                Text("漫画阅读顺序", fontSize = 13.sp, lineHeight = 20.sp, color = DColors.Muted, modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 4.dp, bottom = 6.dp))
-                ComicSortOption("名称正序", ComicDirection.NameAscending, presentation) { if (active) onSelect(it) }
-                ComicSortOption("名称倒序", ComicDirection.NameDescending, presentation) { if (active) onSelect(it) }
+        DPopupCard(panel, fraction, dialogInsets, onDismiss) { card ->
+            Column(card.verticalScroll(rememberScrollState())) {
+                DPopupHeader("漫画阅读顺序", onDismiss)
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ComicSortOption("名称正序", ComicDirection.NameAscending, presentation) { if (active) onSelect(it) }
+                    ComicSortOption("名称倒序", ComicDirection.NameDescending, presentation) { if (active) onSelect(it) }
+                }
             }
         }
     }
@@ -135,8 +139,11 @@ private fun ComicSortDialog(direction: ComicDirection?, onDismiss: () -> Unit, o
 
 @Composable
 private fun ComicSortOption(label: String, option: ComicDirection, selected: ComicDirection, onSelect: (ComicDirection) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(enabled = LocalDDialogActive.current) { onSelect(option) }.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), fontSize = 16.sp, lineHeight = 24.sp, color = if (option == selected) DColors.Action else DColors.Ink)
+    Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).clip(RoundedCornerShape(17.dp)).semantics { this.selected = option == selected }
+        .clickable(enabled = LocalDDialogActive.current) { onSelect(option) }.padding(horizontal = 11.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        DIconImage(DIcon.Sort, Color(0xFF6B7D98), 23.dp, strokeWidth = 1.75f)
+        Text(label, Modifier.weight(1f), fontSize = 15.sp, lineHeight = 24.sp, color = if (option == selected) DColors.Action else DColors.Ink)
         if (option == selected) DIconImage(DIcon.Check, DColors.Action, 18.dp)
     }
 }

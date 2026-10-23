@@ -42,7 +42,9 @@ enum class DIcon(val path: String) {
     SettingsPlay("m9 5 11 7-11 7V5Z"),
     SettingsTrash("M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"),
     SettingsInfo("M12 16v-4m0-4h.01M3 12a9 9 0 1 0 18 0 9 9 0 1 0-18 0"),
-    SettingsFile("M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h8M8 16h6");
+    SettingsFile("M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h8M8 16h6"),
+    SettingsArtist("M20 21v-2a7 7 0 0 0-14 0v2M9 7a4 4 0 1 0 8 0 4 4 0 1 0-8 0"),
+    SettingsEdit("m4 16 11-11 4 4L8 20H4v-4Zm9-9 4 4");
     val vectorPath by lazy { PathParser().parsePathString(path).toPath() }
 }
 

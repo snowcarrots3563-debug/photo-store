@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.items
 import dev.local.artistgallery.data.preview.PreviewDecoder
 import dev.local.artistgallery.data.exporting.ExportScope
 import dev.local.artistgallery.model.MediaSort
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,7 +26,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -56,7 +54,7 @@ fun GalleryDialogs(state: GalleryUiState, toast: String?, onEvent: (GalleryEvent
     var centered by remember { mutableStateOf(false) }
     if (allowed) centered = dialog == GalleryDialog.ArtistImageSort || dialog == GalleryDialog.CollectionMediaSort
     DAnimatedDialog(state.takeIf { allowed }, { if (!state.isSaving) onEvent(GalleryEvent.DismissDialog) },
-        DialogProperties(decorFitsSystemWindows = false, dismissOnBackPress = !state.isSaving, dismissOnClickOutside = !state.isSaving), centered) { presentation, panel, fraction ->
+        DialogProperties(decorFitsSystemWindows = false, dismissOnBackPress = !state.isSaving, dismissOnClickOutside = !state.isSaving), centered, contentKey = dialog::class) { presentation, panel, fraction ->
         GalleryDialogContent(presentation, toast, { if (allowed) onEvent(it) }, onArchive, previewDecoder, onFolder, onExport, panel, fraction)
     }
 }
@@ -124,69 +122,52 @@ private fun GalleryDialogContent(state: GalleryUiState, toast: String?, onEvent:
         val keyboard = LocalSoftwareKeyboardController.current
         LaunchedEffect(hasInput) { if (!hasInput) keyboard?.hide() }
         val dialogInsets = galleryDialogWindowInsets(includeIme = hasInput)
-        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction)).testTag("galleryDialogBackdrop").windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).clickable(enabled = LocalDDialogActive.current, interactionSource = remember { MutableInteractionSource() }, indication = null) { if (!isImportRunning && !state.isSaving) onEvent(GalleryEvent.DismissDialog) }, contentAlignment = Alignment.BottomCenter) {
-            val inset = if (maxWidth <= 370.dp) 20.dp else 22.dp
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp).widthIn(max = 398.dp).fillMaxWidth().heightIn(max = maxHeight - 16.dp)
-                .then(modifier).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
-                .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom))
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
-                .then(if (dialog is GalleryDialog.ArtistCover) Modifier else Modifier.verticalScroll(rememberScrollState())).padding(inset).semantics { paneTitle = title }) {
-                Row(Modifier.fillMaxWidth().layout { measurable, constraints ->
-                    val margin = 6.dp.roundToPx()
-                    val placeable = measurable.measure(constraints.copy(minWidth = constraints.minWidth + margin * 2, maxWidth = constraints.maxWidth + margin * 2))
-                    layout(placeable.width - margin * 2, placeable.height - margin) { placeable.placeRelative(-margin, -margin) }
-                }.padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (dialog is GalleryDialog.AddArtist) DIconButton(DIcon.Back, "上一步", !state.isSaving) {
+        DPopupCard(modifier, fraction, dialogInsets,
+            onDismiss = { if (!isImportRunning && !state.isSaving) onEvent(GalleryEvent.DismissDialog) },
+            backdropModifier = Modifier.testTag("galleryDialogBackdrop")) { card ->
+            Column(card.then(if (dialog is GalleryDialog.ArtistCover) Modifier else Modifier.verticalScroll(rememberScrollState())).semantics { paneTitle = title }) {
+                DPopupHeader(title, onClose = { onEvent(GalleryEvent.DismissDialog) },
+                    closeLabel = if (isImportRunning) "关闭导入进度" else "取消", enabled = !state.isSaving,
+                    onBack = if (dialog is GalleryDialog.AddArtist) { {
                         if (dialog.fromArchiveImport) onEvent(GalleryEvent.DismissDialog) else open(GalleryDialog.AddMenu)
-                    }
-                    Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f).padding(start = 6.dp).semantics { heading() })
-                    DIconButton(DIcon.Close, if (isImportRunning) "关闭导入进度" else "取消", !state.isSaving) { onEvent(GalleryEvent.DismissDialog) }
-                }
+                    } } else null)
                 when (dialog) {
                     GalleryDialog.AddMenu -> {
                         DialogHint("选择来源，或添加画师。")
-                        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(DColors.Background).padding(horizontal = 12.dp)) {
-                            DRow("从相册导入", "选择手机中的图片、GIF 或视频", DIcon.Image, compact = true) { onEvent(GalleryEvent.OpenImportTarget()) }
-                            DDivider(0)
-                            DRow("从文件导入", "在系统文件管理中选择图片、GIF 或视频", DIcon.Import, compact = true) { onEvent(GalleryEvent.OpenImportTarget(fromFiles = true)) }
-                            DDivider(0)
-                            DRow("从压缩包导入", "ZIP、RAR、7z，支持密码与分卷", DIcon.Archive, compact = true) { if (onArchive != null) onArchive() else unavailable("从压缩包导入", 4) }
-                            DDivider(0)
-                            DRow("从文件夹导入", "递归子目录，按目录新建作品集", DIcon.Import, compact = true) { if (onFolder != null) onFolder() else unavailable("从文件夹导入", 4) }
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            DPopupOption("从相册导入", DIcon.SettingsImage, "选择手机中的图片、GIF 或视频") { onEvent(GalleryEvent.OpenImportTarget()) }
+                            DPopupOption("从文件导入", DIcon.SettingsFile, "在系统文件管理中选择图片、GIF 或视频") { onEvent(GalleryEvent.OpenImportTarget(fromFiles = true)) }
+                            DPopupOption("从压缩包导入", DIcon.SettingsArchive, "ZIP、RAR、7z，支持密码与分卷") { if (onArchive != null) onArchive() else unavailable("从压缩包导入", 4) }
+                            DPopupOption("从文件夹导入", DIcon.SettingsFolder, "递归子目录，按目录新建作品集") { if (onFolder != null) onFolder() else unavailable("从文件夹导入", 4) }
                             if (state.route == GalleryRoute.Home) {
-                                DDivider(0)
-                                DRow("添加画师", icon = DIcon.Plus, compact = true) { open(GalleryDialog.AddArtist()) }
+                                DPopupOption("添加画师", DIcon.SettingsArtist) { open(GalleryDialog.AddArtist()) }
                             }
                         }
                     }
                     GalleryDialog.ArtistMenu -> {
                         val id = (state.route as? GalleryRoute.Artist)?.id
-                        DRow("修改画师名字", compact = true) { state.artistDetail?.artist?.let { open(GalleryDialog.RenameArtist(it.id, it.name)) } }
-                        DDivider(4)
-                        DRow("新建作品集", icon = DIcon.Plus, compact = true) { if (id != null) open(GalleryDialog.CreateCollection(id)) }
-                        DDivider(4)
-                        DRow("更换封面", icon = DIcon.Image, compact = true) { if (id != null) onEvent(GalleryEvent.OpenArtistCover(id)) }
-                        DDivider(4)
-                        DRow("从相册导入", icon = DIcon.Image, compact = true) { onEvent(GalleryEvent.OpenImportTarget(artistId = id)) }
-                        DDivider(4)
-                        DRow("从文件导入", icon = DIcon.Import, compact = true) { onEvent(GalleryEvent.OpenImportTarget(artistId = id, fromFiles = true)) }
-                        DDivider(4)
-                        DRow("导出这位画师", icon = DIcon.Export, compact = true) {
-                            if (onExport != null && id != null) { onEvent(GalleryEvent.DismissDialog); onExport(ExportScope.Artists(listOf(id))) }
-                            else unavailable("导出这位画师", 5)
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            DPopupOption("修改画师名字", DIcon.SettingsEdit) { state.artistDetail?.artist?.let { open(GalleryDialog.RenameArtist(it.id, it.name)) } }
+                            DPopupOption("新建作品集", DIcon.Plus) { if (id != null) open(GalleryDialog.CreateCollection(id)) }
+                            DPopupOption("更换封面", DIcon.SettingsImage) { if (id != null) onEvent(GalleryEvent.OpenArtistCover(id)) }
+                            DPopupOption("从相册导入", DIcon.SettingsDownload) { onEvent(GalleryEvent.OpenImportTarget(artistId = id)) }
+                            DPopupOption("从文件导入", DIcon.SettingsFile) { onEvent(GalleryEvent.OpenImportTarget(artistId = id, fromFiles = true)) }
+                            DPopupOption("导出这位画师", DIcon.SettingsUpload) {
+                                if (onExport != null && id != null) { onEvent(GalleryEvent.DismissDialog); onExport(ExportScope.Artists(listOf(id))) }
+                                else unavailable("导出这位画师", 5)
+                            }
+                            DPopupOption("删除整个画师", DIcon.SettingsTrash) { state.artistDetail?.artist?.let { open(GalleryDialog.DeleteArtist(it.id, it.name)) } }
                         }
-                        DDivider(4)
-                        DRow("删除整个画师", icon = DIcon.Close, compact = true) { state.artistDetail?.artist?.let { open(GalleryDialog.DeleteArtist(it.id, it.name)) } }
                     }
                     GalleryDialog.CollectionMenu -> {
-                        DRow("作品集改名", compact = true) { state.collection?.let { open(GalleryDialog.RenameCollection(it.id, it.name)) } }
-                        DDivider(4)
-                        DRow("导入", icon = DIcon.Import, compact = true) { state.collection?.let { onEvent(GalleryEvent.OpenImportTarget(it.artistId, it.id)) } }
-                        DDivider(4)
-                        DRow("导出这个作品集", icon = DIcon.Export, compact = true) {
-                            val id = state.collection?.id
-                            if (onExport != null && id != null) { onEvent(GalleryEvent.DismissDialog); onExport(ExportScope.Collections(listOf(id))) }
-                            else unavailable("导出这个作品集", 5)
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            DPopupOption("作品集改名", DIcon.SettingsEdit) { state.collection?.let { open(GalleryDialog.RenameCollection(it.id, it.name)) } }
+                            DPopupOption("导入", DIcon.SettingsDownload) { state.collection?.let { onEvent(GalleryEvent.OpenImportTarget(it.artistId, it.id)) } }
+                            DPopupOption("导出这个作品集", DIcon.SettingsUpload) {
+                                val id = state.collection?.id
+                                if (onExport != null && id != null) { onEvent(GalleryEvent.DismissDialog); onExport(ExportScope.Collections(listOf(id))) }
+                                else unavailable("导出这个作品集", 5)
+                            }
                         }
                     }
                     is GalleryDialog.AddArtist, is GalleryDialog.CreateCollection, is GalleryDialog.RenameCollection, is GalleryDialog.RenameArtist -> NameForm(dialog, state.isSaving, state.fieldError, onEvent)

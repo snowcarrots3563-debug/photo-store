@@ -1,6 +1,7 @@
 package dev.local.artistgallery.ui
 
-import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
@@ -15,11 +16,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
 internal val LocalDDialogActive = compositionLocalOf { true }
+internal val DPopupSlide = SemanticsPropertyKey<Float>("PopupSlideDp")
+internal val DPopupOpacity = SemanticsPropertyKey<Float>("PopupOpacity")
 
 /** Keeps only the last presentation during exit. Business hide/dismiss always happens immediately. */
 @Composable
@@ -28,21 +33,32 @@ internal fun <T : Any> DAnimatedDialog(
     onDismissRequest: () -> Unit,
     properties: DialogProperties = DialogProperties(decorFitsSystemWindows = false),
     centered: Boolean = false,
+    contentKey: Any? = Unit,
     content: @Composable (T, Modifier, Float) -> Unit,
 ) {
     val parentActive = LocalDDialogActive.current
     val active = value != null && parentActive
     var lastValue by remember { mutableStateOf(value) }
-    if (value != null && parentActive) lastValue = value
+    var shownKey by remember { mutableStateOf(contentKey) }
+    val replacing = active && lastValue != null && shownKey != contentKey
+    if (active) { lastValue = value; shownKey = contentKey }
     val visibility = remember { MutableTransitionState(false) }
     visibility.targetState = active
-    val transition = updateTransition(visibility, label = "dialogVisibility")
-    val fraction by transition.animateFloat(transitionSpec = { tween(400, easing = LinearOutSlowInEasing) }, label = "dialogFraction") { if (it) 1f else 0f }
     if (!visibility.currentState && !visibility.targetState && visibility.isIdle) {
         lastValue = null
         return
     }
+    val transition = updateTransition(visibility, label = "dialogVisibility")
+    val entry = CubicBezierEasing(.215f, .61f, .355f, 1f)
+    val exit = CubicBezierEasing(.23f, 1f, .32f, 1f)
+    val opacity = transition.animateFloat(transitionSpec = { if (targetState) tween(400, easing = entry) else tween(180, easing = exit) }, label = "dialogOpacity") { if (it) 1f else 0f }
+    val slide = transition.animateFloat(transitionSpec = { if (targetState) tween(400, easing = entry) else tween(180, easing = exit) }, label = "dialogSlide") {
+        if (it) 0f else if (active) 80f else 55f
+    }
+    val scrim = transition.animateFloat(transitionSpec = { tween(if (targetState) 200 else 160, easing = exit) }, label = "dialogScrim") { if (it) 1f else 0f }
     val presentation = lastValue ?: return
+    val page = remember(shownKey) { Animatable(if (replacing) 0f else 1f) }
+    LaunchedEffect(page) { if (page.value < 1f) page.animateTo(1f, tween(240, easing = entry)) }
     val currentDismiss by rememberUpdatedState(onDismissRequest)
     Dialog(onDismissRequest = { if (active) currentDismiss() }, properties = properties) {
         val focus = LocalFocusManager.current
@@ -59,12 +75,15 @@ internal fun <T : Any> DAnimatedDialog(
                     }
                 })) {
                 content(presentation, Modifier.graphicsLayer {
-                    alpha = fraction
+                    alpha = opacity.value * page.value
                     if (centered) {
-                        scaleX = .96f + .04f * fraction
+                        scaleX = .96f + .04f * opacity.value
                         scaleY = scaleX
-                    } else translationY = 24.dp.toPx() * (1f - fraction)
-                }, fraction)
+                    } else translationY = (slide.value + 12f * (1f - page.value)).dp.toPx()
+                }.semantics {
+                    this[DPopupSlide] = if (centered) 0f else slide.value + 12f * (1f - page.value)
+                    this[DPopupOpacity] = opacity.value * page.value
+                }, scrim.value)
             }
         }
     }

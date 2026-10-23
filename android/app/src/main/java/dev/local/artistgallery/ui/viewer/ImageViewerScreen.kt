@@ -5,7 +5,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animate
@@ -61,6 +62,9 @@ import dev.local.artistgallery.ui.PreviewImage
 import dev.local.artistgallery.ui.rememberPreviewImage
 import dev.local.artistgallery.ui.DGroup
 import dev.local.artistgallery.ui.DAnimatedDialog
+import dev.local.artistgallery.ui.DPopupCard
+import dev.local.artistgallery.ui.DPopupHeader
+import dev.local.artistgallery.ui.DPopupOption
 import dev.local.artistgallery.ui.LocalDDialogActive
 import dev.local.artistgallery.ui.galleryDialogWindowInsets
 import kotlinx.coroutines.launch
@@ -284,40 +288,23 @@ fun ImageViewerScreen(state: GalleryUiState, assetId: String, previewDecoder: Pr
 @Composable
 private fun ViewerActionsDialog(visible: Boolean, onClose: () -> Unit, onAdd: () -> Unit, onExport: () -> Unit, onShare: () -> Unit, shareEnabled: Boolean) {
     DAnimatedDialog(Unit.takeIf { visible }, onDismissRequest = onClose) { _, panel, fraction ->
-        val active = LocalDDialogActive.current
         val dialogInsets = galleryDialogWindowInsets()
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f * fraction))
-            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
-            .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)), contentAlignment = Alignment.BottomCenter) {
-            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp).then(panel).clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)).background(DColors.Panel)
-                .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { }
-                .windowInsetsPadding(dialogInsets.only(WindowInsetsSides.Bottom)).padding(horizontal = 20.dp, vertical = 14.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("图片操作", fontSize = 20.sp, lineHeight = 29.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    DIconButton(DIcon.Close, "关闭", enabled = active) { onClose() }
+        DPopupCard(panel, fraction, dialogInsets, onClose) { card ->
+            Column(card.verticalScroll(rememberScrollState())) {
+                DPopupHeader("图片操作", onClose)
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    DPopupOption("加入其他作品集", DIcon.SettingsFolder, onClick = onAdd)
+                    DPopupOption("导出这张图片", DIcon.SettingsUpload, onClick = onExport)
+                    DPopupOption("分享这张图片", DIcon.SettingsImage, enabled = shareEnabled, onClick = onShare)
                 }
-                Spacer(Modifier.height(8.dp))
-                ViewerActionRow("加入其他作品集", DIcon.Plus, onAdd)
-                ViewerActionRow("导出这张图片", DIcon.Export, onExport)
-                ViewerActionRow("分享这张图片", DIcon.Export, onShare, enabled = shareEnabled)
             }
         }
     }
 }
 
 @Composable
-private fun ViewerActionRow(label: String, icon: DIcon, onClick: () -> Unit, enabled: Boolean = true) {
-    androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).clickable(enabled = enabled && LocalDDialogActive.current, onClick = onClick), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        DIconImage(icon, if (enabled) DColors.Ink else DColors.Muted)
-        Text(label, Modifier.weight(1f), color = if (enabled) DColors.Ink else DColors.Muted, fontSize = 15.sp)
-        DIconImage(DIcon.Next, DColors.Muted, 18.dp)
-    }
-}
-
-@Composable
 private fun OriginalImageDialog(item: MediaAssetSummary?, decoder: PreviewDecoder, onClose: () -> Unit) {
-    val density = LocalDensity.current
-    DAnimatedDialog(item, onDismissRequest = onClose, centered = true) { presentation, panel, fraction ->
+    DAnimatedDialog(item, onDismissRequest = onClose, contentKey = item?.id) { presentation, panel, fraction ->
         val active = LocalDDialogActive.current
         var zoom by remember(presentation.id) { mutableFloatStateOf(1f) }
         var pan by remember(presentation.id) { mutableStateOf(Offset.Zero) }
@@ -325,27 +312,19 @@ private fun OriginalImageDialog(item: MediaAssetSummary?, decoder: PreviewDecode
         var decodeScale by remember(presentation.id) { mutableIntStateOf(2) }
         var lastBitmap by remember(presentation.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
         val dialogInsets = galleryDialogWindowInsets()
-        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f * fraction))
-            .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
-            .windowInsetsPadding(dialogInsets).padding(16.dp), contentAlignment = Alignment.Center) {
-            val viewportWidth = with(density) { maxWidth.roundToPx() }
-            val viewportHeight = with(density) { (maxHeight - 190.dp).coerceAtLeast(120.dp).roundToPx() }
+        DPopupCard(panel, fraction, dialogInsets, onClose) { card ->
+            val frameHeight = minOf(390.dp, maxHeight * .54f)
             // Removing this branch cancels the original request immediately; only pixels remain during exit.
-            val image = if (active) rememberPreviewImage(presentation.storageKey, decoder, viewportWidth * decodeScale, viewportHeight * decodeScale) else null
+            val image = if (active && frame.width > 0 && frame.height > 0) rememberPreviewImage(presentation.storageKey, decoder, frame.width * decodeScale, frame.height * decodeScale) else null
             val decoded = (image as? PreviewImage.Still)?.bitmap
             SideEffect { if (decoded != null) lastBitmap = decoded }
             val bitmap = decoded ?: lastBitmap
             LaunchedEffect(bitmap, frame) {
                 pan = boundedOriginalPan(pan, zoom, bitmap?.width ?: 0, bitmap?.height ?: 0, frame)
             }
-            Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).then(panel).clip(RoundedCornerShape(28.dp)).background(DColors.Panel)
-                .clickable(enabled = active, interactionSource = remember { MutableInteractionSource() }, indication = null) { }
-                .padding(horizontal = 20.dp, vertical = 14.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("无特效原图", fontSize = 20.sp, lineHeight = 29.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    DIconButton(DIcon.Close, "关闭", enabled = active) { onClose() }
-                }
-                Box(Modifier.weight(1f, fill = false).fillMaxWidth().testTag("originalImageFrame")
+            Column(card) {
+                DPopupHeader("无特效原图", onClose)
+                Box(Modifier.weight(1f, fill = false).fillMaxWidth().height(frameHeight).testTag("originalImageFrame")
                     .onSizeChanged {
                         frame = it
                         pan = boundedOriginalPan(pan, zoom, bitmap?.width ?: 0, bitmap?.height ?: 0, it)

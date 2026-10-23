@@ -28,6 +28,27 @@ class NativeMotionDisabledUiTest {
         override val scaleFactor = 0f
     })
 
+    @Test fun floatingPopupStepAndCloseReachTerminalStateWithMotionDisabled() {
+        compose.mainClock.autoAdvance = false
+        var value by mutableStateOf<String?>(null)
+        var step by mutableIntStateOf(0)
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent { DTheme {
+            DAnimatedDialog(value, { value = null }, contentKey = step) { model, panel, fraction ->
+                Text(model, panel.testTag("zeroPopup").semantics { motionFraction = fraction })
+            }
+        } } }
+        compose.runOnIdle { value = "首次" }
+        repeat(4) { compose.mainClock.advanceTimeByFrame() }
+        compose.runOnIdle { value = "下一步"; step = 1 }
+        repeat(4) { compose.mainClock.advanceTimeByFrame() }
+        compose.onNodeWithTag("zeroPopup").assert(SemanticsMatcher.expectValue(DPopupSlide, 0f))
+            .assert(SemanticsMatcher.expectValue(DPopupOpacity, 1f))
+            .assert(SemanticsMatcher.expectValue(DMotionFraction, 1f))
+        compose.runOnIdle { value = null }
+        repeat(4) { compose.mainClock.advanceTimeByFrame() }
+        compose.onNode(isDialog()).assertDoesNotExist()
+    }
+
     @Test fun navigationAndDialogsReachTheirRealTerminalStateWithoutTimedWaits() {
         compose.mainClock.autoAdvance = false
         var manage by mutableStateOf(false)

@@ -2,8 +2,6 @@ package dev.local.artistgallery.ui.exporting
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,10 +10,9 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,16 +29,12 @@ import java.util.Locale
 
 @Composable
 fun LocalTransferDialog(state: LocalTransferState, coordinator: LocalTransferCoordinator, save: () -> Unit, pickRestore: () -> Unit) {
-    DAnimatedDialog(state.takeIf { state.visible }, coordinator::hide) { presentation, panel, fraction ->
+    DAnimatedDialog(state.takeIf { state.visible }, coordinator::hide, contentKey = state.step to state.kind) { presentation, panel, fraction ->
         val insets = galleryDialogWindowInsets()
-        BoxWithConstraints(Modifier.fillMaxSize().background(DColors.Ink.copy(alpha = .2f * fraction))
-            .windowInsetsPadding(insets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-            .clickable(enabled = LocalDDialogActive.current, interactionSource = remember { MutableInteractionSource() }, indication = null) { coordinator.hide() }, contentAlignment = Alignment.BottomCenter) {
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp).widthIn(max = 398.dp).fillMaxWidth().heightIn(max = maxHeight - 16.dp)
-                .then(panel).clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)).background(DColors.Panel)
-                .windowInsetsPadding(insets.only(WindowInsetsSides.Bottom))
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
-                .padding(if (maxWidth <= 370.dp) 20.dp else 22.dp)) {
+        DPopupCard(panel, fraction, insets, coordinator::hide) { card ->
+            val scroll = key(presentation.step) { rememberScrollState() }
+            val scrollable = presentation.step in setOf(TransferStep.Scope, TransferStep.RestorePick, TransferStep.Preparing, TransferStep.Working, TransferStep.Destination)
+            Column(card.then(if (scrollable) Modifier.verticalScroll(scroll) else Modifier)) {
                 LocalTransferContent(presentation, coordinator::choose, coordinator::toggle, coordinator::previewSelection,
                     save, pickRestore, coordinator::confirmRestore, coordinator::cancel, coordinator::hide, coordinator::done, coordinator::chooseScope)
             }
@@ -87,10 +80,8 @@ internal fun ColumnScope.LocalTransferContent(
             else -> "导出结果"
         }
     }
-    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp).semantics { paneTitle = title }, verticalAlignment = Alignment.CenterVertically) {
-        if (state.step == TransferStep.Selection) DIconButton(DIcon.Back, "上一步", onClick = backToScope)
-        Text(title, Modifier.weight(1f).padding(start = 6.dp).semantics { heading() }, style = MaterialTheme.typography.headlineSmall)
-        DIconButton(DIcon.Close, "关闭窗口", onClick = hide)
+    Column(Modifier.semantics { paneTitle = title }) {
+        DPopupHeader(title, onClose = hide, closeLabel = "关闭窗口", onBack = backToScope.takeIf { state.step == TransferStep.Selection })
     }
     if (state.step != TransferStep.Result) state.message?.let {
         Text(it, color = DColors.Error, fontSize = 13.sp, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 10.dp).semantics { liveRegion = LiveRegionMode.Polite })
